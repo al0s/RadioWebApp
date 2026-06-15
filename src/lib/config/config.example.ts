@@ -20,7 +20,7 @@ export const exampleConfig: Config = {
 		],
 		links: [
 			{
-				iconLabel: 'Github',
+				iconLabel: 'Link',
 				url: 'https://github.com/yourusername'
 			}
 		],
@@ -37,7 +37,7 @@ export const exampleConfig: Config = {
 			},
 			{
 				label: 'Social Media',
-				iconLabel: 'Twitter',
+				iconLabel: 'Link',
 				url: 'https://x.com/example'
 			}
 		]
@@ -79,7 +79,7 @@ export const exampleConfig: Config = {
 					url: 'https://example.com/radio2'
 				},
 				{
-					iconLabel: 'Twitter',
+					iconLabel: 'Link',
 					url: 'https://x.com/radio2'
 				}
 			],

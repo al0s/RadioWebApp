@@ -13,12 +13,6 @@ export default defineConfig(({ mode }) => {
 	const splash = getEnv('SPLASH_SCREEN_COLOR')?.replace(/^#/, '');
 
 	return {
-		esbuild: {
-			drop: isProd ? ['debugger'] : [],
-			pure: isProd
-				? ['console.log', 'console.debug', 'console.info', 'console.trace', 'console.warn']
-				: []
-		},
 		plugins: [
 			sveltekit(),
 			SvelteKitPWA({
@@ -120,7 +114,25 @@ export default defineConfig(({ mode }) => {
 		],
 		build: {
 			chunkSizeWarningLimit: 1000,
-			rollupOptions: {
+			rolldownOptions: {
+				...(isProd && {
+					output: {
+						minify: {
+							compress: {
+								dropDebugger: true,
+								treeshake: {
+									manualPureFunctions: [
+										'console.log',
+										'console.debug',
+										'console.info',
+										'console.trace',
+										'console.warn'
+									]
+								}
+							}
+						}
+					}
+				}),
 				onwarn(warning, warn) {
 					if (warning.message.includes('but also statically imported by')) return;
 					warn(warning);

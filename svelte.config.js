@@ -9,10 +9,7 @@ const config = {
 
 	kit: {
 		// https://svelte.dev/docs/kit/adapters
-		adapter: adapter(),
-		csrf: {
-			checkOrigin: true
-		}
+		adapter: adapter()
 	}
 };
 
