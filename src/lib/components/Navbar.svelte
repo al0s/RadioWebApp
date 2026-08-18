@@ -117,6 +117,17 @@
 			closeSearch();
 		}
 	}
+
+	function handleDesktopSearchBlur() {
+		if (isMobile) return;
+		if ($searchQuery.trim()) return;
+		closeSearch();
+	}
+
+	function handleDesktopSearchClear() {
+		if (isMobile) return;
+		closeSearch();
+	}
 </script>
 
 <svelte:window on:keydown={handleSearchKeydown} />
@@ -181,6 +192,7 @@
 						ariaLabel={$t.navbar.closeSearch}
 						circle={false}
 						buttonClassName="px-1"
+						className="sm:hidden"
 						size="sm"
 					>
 						<ChevronLeft class="w-[32px]" />
@@ -193,6 +205,8 @@
 					clearLabel={$t.home.searchClear}
 					focusOnMount={searchOpenOnHome}
 					onFocus={openSearch}
+					onBlur={handleDesktopSearchBlur}
+					onClear={handleDesktopSearchClear}
 				/>
 			</div>
 		{:else if !$showBackButton}

@@ -7,6 +7,8 @@
 	export let clearLabel = '';
 	export let focusOnMount = true;
 	export let onFocus: () => void = () => {};
+	export let onBlur: () => void = () => {};
+	export let onClear: () => void = () => {};
 
 	let inputEl: HTMLInputElement | undefined;
 
@@ -16,7 +18,17 @@
 
 	function clear() {
 		value = '';
+		onClear();
 		inputEl?.focus();
+	}
+
+	function handleBlur(event: FocusEvent) {
+		const next = event.relatedTarget;
+		if (next instanceof Node && event.currentTarget instanceof HTMLElement) {
+			const root = event.currentTarget.closest('label');
+			if (root?.contains(next)) return;
+		}
+		onBlur();
 	}
 </script>
 
@@ -36,6 +48,7 @@
 		enterkeyhint="search"
 		bind:value
 		on:focus={onFocus}
+		on:blur={handleBlur}
 	/>
 	{#if value}
 		<button
