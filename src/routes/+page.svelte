@@ -17,15 +17,14 @@
 	import { get } from 'svelte/store';
 	import VirtualList from '$lib/components/utility/VirtualList.svelte';
 	import { searchPodcasts, type SearchHit } from '$lib/util/search';
+	import { homeSearchQuery } from '$lib/stores/homeSearch';
 
 	let expandedPodcasts = new Set<string>();
 	let headerClasses = 'mb-2 sm:mb-4';
 	let headerTextClasses = 'text-2xl font-bold';
 	let sectionClasses = 'grid grid-cols-1 items-start gap-2 sm:gap-4 lg:grid-cols-2 2xl:grid-cols-3';
-	let filteredPodcasts: Podcast[] = [];
 	const ALL_CATEGORY = 'All'; // Keep this as a constant for comparison
 
-	let searchQuery = '';
 	let lastSearchKey = '';
 
 	let sharedPodcastId: string | null = null;
@@ -36,15 +35,6 @@
 
 	// Create a locale-aware sorter based on the current language
 	$: localeSorter = new Intl.Collator($settings.language, { sensitivity: 'base' });
-
-	$: {
-		filteredPodcasts = $podcasts.filter((podcast) => !$podcastFavorites[podcast.id]);
-		if (selectedCategory !== ALL_CATEGORY) {
-			filteredPodcasts = filteredPodcasts.filter((podcast) => {
-				return podcast.categories.includes(selectedCategory);
-			});
-		}
-	}
 
 	$: selectedCategory = $settings.selectedCategory;
 	$: categoryList = [
@@ -61,15 +51,16 @@
 	$: favoriteRadios = $radios.filter((radio) => !!$radioFavorites[radio.title]);
 	$: otherRadios = $radios.filter((radio) => !$radioFavorites[radio.title]);
 	$: favoritePodcasts = $podcasts.filter((podcast) => !!$podcastFavorites[podcast.id]);
-	$: otherPodcasts = filteredPodcasts;
 
-	$: isSearching = searchQuery.trim().length > 0;
+	$: isSearching = $homeSearchQuery.trim().length > 0;
 	$: categoryPodcasts =
 		selectedCategory === ALL_CATEGORY
 			? $podcasts
 			: $podcasts.filter((podcast) => podcast.categories.includes(selectedCategory));
+	$: filteredPodcasts = categoryPodcasts.filter((podcast) => !$podcastFavorites[podcast.id]);
+	$: otherPodcasts = filteredPodcasts;
 	$: searchHits = isSearching
-		? searchPodcasts(categoryPodcasts, searchQuery)
+		? searchPodcasts(categoryPodcasts, $homeSearchQuery)
 		: [];
 	$: searchHitById = new Map(searchHits.map((hit) => [hit.podcast.id, hit]));
 	$: exactPodcasts = searchHits.filter((hit) => hit.matchKind === 'exact').map((hit) => hit.podcast);
@@ -78,21 +69,17 @@
 		.map((hit) => hit.podcast);
 	$: archivePodcasts = isSearching ? searchHits.map((hit) => hit.podcast) : otherPodcasts;
 
-	$: if (searchQuery !== lastSearchKey) {
-		lastSearchKey = searchQuery;
+	$: if ($homeSearchQuery !== lastSearchKey) {
+		lastSearchKey = $homeSearchQuery;
 		expandedPodcasts = new Set();
 	}
 
 	$: if (typeof window !== 'undefined') {
-		void searchQuery;
+		void $homeSearchQuery;
 		queueMicrotask(() => {
 			const scroller = document.querySelector<HTMLElement>('.grow.overflow-y-auto');
 			scroller?.scrollTo({ top: 0 });
 		});
-	}
-
-	function handleSearchChange(value: string) {
-		searchQuery = value;
 	}
 
 	function searchMatch(podcast: Podcast): SearchHit | undefined {
@@ -220,11 +207,10 @@
 >
 	<div class="min-w-0 flex-1">
 		<SearchInput
-			bind:value={searchQuery}
+			bind:value={$homeSearchQuery}
 			placeholder={$t.home.searchPlaceholder}
 			ariaLabel={$t.home.searchLabel}
 			clearLabel={$t.home.searchClear}
-			onChange={handleSearchChange}
 		/>
 	</div>
 	<div class="shrink-0">
@@ -249,7 +235,7 @@
 					onExpand={handlePodcastExpand}
 					matchField={hit?.matchField}
 					matchedEpisodeIds={hit?.matchedEpisodeIds}
-					highlightQuery={isSearching ? searchQuery : ''}
+					highlightQuery={isSearching ? $homeSearchQuery : ''}
 				/>
 			</svelte:fragment>
 		</VirtualList>

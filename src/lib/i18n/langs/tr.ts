@@ -34,6 +34,7 @@ export const tr: TranslationType = {
     searchClear: 'Aramayı temizle',
     searchNoResults: 'Sonuç bulunamadı',
     searchMatchTitle: 'Başlık',
+    searchMatchEpisode: '1 Bölüm',
     searchMatchEpisodes: '{count} Bölüm',
     searchExactMatches: 'Birebir eşleşmeler',
     searchSimilarMatches: 'Benzer sonuçlar'

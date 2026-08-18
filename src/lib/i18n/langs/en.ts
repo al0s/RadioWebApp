@@ -33,7 +33,8 @@ export const en = {
 		searchClear: 'Clear search',
 		searchNoResults: 'No results found',
 		searchMatchTitle: 'Title',
-		searchMatchEpisodes: '{count} episode',
+		searchMatchEpisode: '1 episode',
+		searchMatchEpisodes: '{count} episodes',
 		searchExactMatches: 'Exact matches',
 		searchSimilarMatches: 'Similar results'
 	},

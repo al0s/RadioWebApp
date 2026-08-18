@@ -41,19 +41,25 @@
 		return `${baseClasses} ${isActive ? 'bg-base-300 shadow-xl outline outline-2 outline-offset-1 outline-primary' : 'bg-base-100 hover:bg-base-300'}`;
 	}
 
-	function getEpisodeSource(source: Podcast, ids?: string[]): Episode[] {
-		if (!ids || ids.length === 0) return source.items;
+	function getEpisodeSource(
+		source: Podcast,
+		field: MatchField | undefined,
+		ids?: string[]
+	): Episode[] {
+		if (field !== 'episode' || !ids || ids.length === 0) return source.items;
 		const idSet = new Set(ids);
 		return source.items.filter((episode) => idSet.has(episode.id));
 	}
 
-	$: episodeSource = getEpisodeSource(podcast, matchedEpisodeIds);
-	$: sourceKey = `${podcast.id}:${(matchedEpisodeIds ?? []).join('|')}`;
+	$: episodeSource = getEpisodeSource(podcast, matchField, matchedEpisodeIds);
+	$: sourceKey = `${podcast.id}:${matchField ?? ''}:${matchField === 'episode' ? (matchedEpisodeIds ?? []).join('|') : ''}`;
 	$: badgeLabel =
 		matchField === 'title'
 			? $t.home.searchMatchTitle
 			: matchField === 'episode'
-				? formatString($t.home.searchMatchEpisodes, { count: matchedEpisodeIds?.length ?? 0 })
+				? (matchedEpisodeIds?.length ?? 0) === 1
+					? $t.home.searchMatchEpisode
+					: formatString($t.home.searchMatchEpisodes, { count: matchedEpisodeIds?.length ?? 0 })
 				: '';
 
 	function loadMoreEpisodes() {
@@ -115,6 +121,13 @@
 		if (!url) return;
 		await copyTextToClipboard(url);
 		showTooltip(get(t).player.linkCopied, 3000, shareTooltipAnchorEl);
+	}
+
+	let lastPodcastId = podcast.id;
+	$: if (podcast.id !== lastPodcastId) {
+		lastPodcastId = podcast.id;
+		imageLoaded = false;
+		isReversed = false;
 	}
 
 	let lastSourceKey = '';

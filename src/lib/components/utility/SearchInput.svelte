@@ -5,19 +5,9 @@
 	export let placeholder = '';
 	export let ariaLabel = '';
 	export let clearLabel = '';
-	export let onChange: (value: string) => void = () => {};
 
-	function handleInput(event: Event) {
-		const next = (event.currentTarget as HTMLInputElement).value;
-		value = next;
-		onChange(next);
-	}
-
-	function clear(event: MouseEvent) {
-		event.preventDefault();
-		event.stopPropagation();
+	function clear() {
 		value = '';
-		onChange('');
 	}
 </script>
 
@@ -34,7 +24,6 @@
 		spellcheck="false"
 		enterkeyhint="search"
 		bind:value
-		on:input={handleInput}
 	/>
 	{#if value}
 		<button
