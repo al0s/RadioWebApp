@@ -6,7 +6,6 @@
 	import { radioFavorites } from '$lib/stores/radio/radioFavorites';
 	import { podcastFavorites } from '$lib/stores/podcast/podcastFavorites';
 	import DropdownSelect from '$lib/components/utility/DropdownSelect.svelte';
-	import SearchInput from '$lib/components/utility/SearchInput.svelte';
 	import { config } from '$lib/config';
 	import { togglePlaylist } from '$lib/stores/player';
 	import { radios, type Radio } from '$lib/stores/radio/radios';
@@ -17,7 +16,7 @@
 	import { get } from 'svelte/store';
 	import VirtualList from '$lib/components/utility/VirtualList.svelte';
 	import { searchPodcasts, type SearchHit } from '$lib/util/search';
-	import { homeSearchQuery } from '$lib/stores/homeSearch';
+	import { searchQuery } from '$lib/stores/search';
 
 	let expandedPodcasts = new Set<string>();
 	let headerClasses = 'mb-2 sm:mb-4';
@@ -52,7 +51,7 @@
 	$: otherRadios = $radios.filter((radio) => !$radioFavorites[radio.title]);
 	$: favoritePodcasts = $podcasts.filter((podcast) => !!$podcastFavorites[podcast.id]);
 
-	$: isSearching = $homeSearchQuery.trim().length > 0;
+	$: isSearching = $searchQuery.trim().length > 0;
 	$: categoryPodcasts =
 		selectedCategory === ALL_CATEGORY
 			? $podcasts
@@ -60,7 +59,7 @@
 	$: filteredPodcasts = categoryPodcasts.filter((podcast) => !$podcastFavorites[podcast.id]);
 	$: otherPodcasts = filteredPodcasts;
 	$: searchHits = isSearching
-		? searchPodcasts(categoryPodcasts, $homeSearchQuery)
+		? searchPodcasts(categoryPodcasts, $searchQuery)
 		: [];
 	$: searchHitById = new Map(searchHits.map((hit) => [hit.podcast.id, hit]));
 	$: exactPodcasts = searchHits.filter((hit) => hit.matchKind === 'exact').map((hit) => hit.podcast);
@@ -69,13 +68,12 @@
 		.map((hit) => hit.podcast);
 	$: archivePodcasts = isSearching ? searchHits.map((hit) => hit.podcast) : otherPodcasts;
 
-	$: if ($homeSearchQuery !== lastSearchKey) {
-		lastSearchKey = $homeSearchQuery;
+	$: if ($searchQuery !== lastSearchKey) {
+		lastSearchKey = $searchQuery;
 		expandedPodcasts = new Set();
 	}
 
-	$: if (typeof window !== 'undefined') {
-		void $homeSearchQuery;
+	$: if (typeof window !== 'undefined' && $searchQuery.trim()) {
 		queueMicrotask(() => {
 			const scroller = document.querySelector<HTMLElement>('.grow.overflow-y-auto');
 			scroller?.scrollTo({ top: 0 });
@@ -201,27 +199,15 @@
 	<div class="divider"></div>
 {/if}
 
-<h2 class="{headerTextClasses} mb-2">{$t.home.archive}</h2>
-<div
-	class="sticky top-0 z-30 -mx-3 flex items-center gap-2 bg-base-100/95 px-3 py-2 pb-3 backdrop-blur-sm sm:pb-4"
->
-	<div class="min-w-0 flex-1">
-		<SearchInput
-			bind:value={$homeSearchQuery}
-			placeholder={$t.home.searchPlaceholder}
-			ariaLabel={$t.home.searchLabel}
-			clearLabel={$t.home.searchClear}
-		/>
-	</div>
-	<div class="shrink-0">
-		<DropdownSelect
-			value={$settings.selectedCategory}
-			onChange={(value) => settings.updateSettings({ selectedCategory: value })}
-			options={categoryOptions}
-			backgroundColor="bg-base-200"
-			specialFirstOption={true}
-		/>
-	</div>
+<div class="flex items-center justify-between {headerClasses}">
+	<h2 class={[headerTextClasses]}>{$t.home.archive}</h2>
+	<DropdownSelect
+		value={$settings.selectedCategory}
+		onChange={(value) => settings.updateSettings({ selectedCategory: value })}
+		options={categoryOptions}
+		backgroundColor="bg-base-200"
+		specialFirstOption={true}
+	/>
 </div>
 {#snippet podcastGrid(items: Podcast[])}
 	<div class={sectionClasses}>
@@ -235,7 +221,7 @@
 					onExpand={handlePodcastExpand}
 					matchField={hit?.matchField}
 					matchedEpisodeIds={hit?.matchedEpisodeIds}
-					highlightQuery={isSearching ? $homeSearchQuery : ''}
+					highlightQuery={isSearching ? $searchQuery : ''}
 				/>
 			</svelte:fragment>
 		</VirtualList>

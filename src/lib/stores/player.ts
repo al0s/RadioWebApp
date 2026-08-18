@@ -1,6 +1,7 @@
 import { writable, get } from 'svelte/store';
+import { tick } from 'svelte';
 import { settings } from '$lib/stores/settings';
-import { clearHomeSearch } from '$lib/stores/homeSearch';
+import { clearSearch } from '$lib/stores/search';
 import { goto } from '$app/navigation';
 import { podcasts, type Episode, type Podcast } from '$lib/stores/podcast/podcasts';
 import { radios, type Radio } from '$lib/stores/radio/radios';
@@ -495,8 +496,8 @@ export function restartRadio() {
 // Other player utilities
 export function togglePlaylist(targetPodcastId?: string) {
 	// Player "go to" has no target id; expand/reverse pass one and must keep search.
-	if (targetPodcastId === undefined && clearHomeSearch()) {
-		setTimeout(() => togglePlaylist(), 0);
+	if (targetPodcastId === undefined && clearSearch()) {
+		tick().then(() => togglePlaylist());
 		return;
 	}
 	const state = get(playerStore);

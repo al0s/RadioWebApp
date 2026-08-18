@@ -81,7 +81,9 @@ export const tr: TranslationType = {
   },
   navbar: {
     goBack: 'Geri git',
-    otherLinks: 'Diğer Bağlantılar'
+    otherLinks: 'Diğer Bağlantılar',
+    search: 'Ara',
+    closeSearch: 'Aramayı kapat'
   },
   modals: {
     externalLinks: 'Diğer Kaynaklar'

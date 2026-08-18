@@ -6,16 +6,25 @@
 	export let ariaLabel = '';
 	export let clearLabel = '';
 
+	let inputEl: HTMLInputElement | undefined;
+
+	function autofocusAction(node: HTMLInputElement) {
+		node.focus();
+	}
+
 	function clear() {
 		value = '';
+		inputEl?.focus();
 	}
 </script>
 
-<label class="relative flex min-h-12 min-w-0 flex-1 items-center">
+<label class="relative flex min-h-10 min-w-0 flex-1 items-center">
 	<Search class="pointer-events-none absolute left-3 h-4 w-4 shrink-0 text-base-content/50" />
 	<input
+		bind:this={inputEl}
+		use:autofocusAction
 		type="text"
-		class="input input-bordered h-12 min-h-12 w-full min-w-0 rounded-lg border-base-300 bg-base-200 pl-10 pr-10 text-base-content select-text"
+		class="input input-bordered h-10 min-h-10 w-full min-w-0 rounded-lg border-base-300 bg-base-200 pl-10 pr-10 text-base-content select-text"
 		style="touch-action: auto; -webkit-user-select: text; user-select: text;"
 		{placeholder}
 		aria-label={ariaLabel || placeholder}

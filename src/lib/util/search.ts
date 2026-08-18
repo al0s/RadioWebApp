@@ -161,12 +161,49 @@ function isEditDistanceOne(a: string, b: string): boolean {
 	return true;
 }
 
-function wordEditDistanceOne(haystack: string, query: string): boolean {
-	if (query.length < 5) return false;
-	for (const word of haystack.split(' ')) {
-		if (isEditDistanceOne(word, query)) return true;
+function mergeFoldRanges(ranges: [number, number][]): [number, number][] {
+	if (ranges.length === 0) return [];
+	ranges.sort((a, b) => a[0] - b[0]);
+	const merged: [number, number][] = [];
+	for (const range of ranges) {
+		const last = merged.at(-1);
+		if (last && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
+		else merged.push([range[0], range[1]]);
 	}
-	return false;
+	return merged;
+}
+
+function findSubstringRanges(haystack: string, needle: string): [number, number][] {
+	if (!needle) return [];
+	const ranges: [number, number][] = [];
+	let from = 0;
+	while (from <= haystack.length - needle.length) {
+		const idx = haystack.indexOf(needle, from);
+		if (idx === -1) break;
+		if (needle.length > 1 || isWordBoundary(haystack, idx)) {
+			ranges.push([idx, idx + needle.length]);
+		}
+		from = idx + 1;
+	}
+	return ranges;
+}
+
+function findFuzzyWordRanges(haystack: string, query: string): [number, number][] {
+	if (query.length < 5) return [];
+	const ranges: [number, number][] = [];
+	let start = 0;
+	for (let i = 0; i <= haystack.length; i++) {
+		if (i < haystack.length && haystack[i] !== ' ') continue;
+		if (i > start && isEditDistanceOne(haystack.slice(start, i), query)) {
+			ranges.push([start, i]);
+		}
+		start = i + 1;
+	}
+	return ranges;
+}
+
+function findNeedleRanges(haystack: string, needle: string): [number, number][] {
+	return [...findSubstringRanges(haystack, needle), ...findFuzzyWordRanges(haystack, needle)];
 }
 
 function tokenKind(haystack: string, query: string): TokenKind | null {
@@ -174,20 +211,16 @@ function tokenKind(haystack: string, query: string): TokenKind | null {
 
 	let foundPrefix = false;
 	let foundInfix = false;
-	let from = 0;
-	while (from <= haystack.length - query.length) {
-		const idx = haystack.indexOf(query, from);
-		if (idx === -1) break;
+	for (const [idx, end] of findSubstringRanges(haystack, query)) {
 		const atStart = isWordBoundary(haystack, idx);
-		const atEnd = isEndBoundary(haystack, idx + query.length);
+		const atEnd = isEndBoundary(haystack, end);
 		if (atStart && atEnd) return 'exact';
 		if (atStart) foundPrefix = true;
 		else if (query.length > 1) foundInfix = true;
-		from = idx + 1;
 	}
 	if (foundPrefix) return 'prefix';
 	if (foundInfix) return 'infix';
-	if (wordEditDistanceOne(haystack, query)) return 'fuzzy';
+	if (findFuzzyWordRanges(haystack, query).length > 0) return 'fuzzy';
 	return null;
 }
 
@@ -254,31 +287,26 @@ export function splitHighlight(original: unknown, query: string): HighlightPart[
 	const { folded, origIndex } = foldMapped(text);
 	if (!folded || origIndex.length === 0) return [{ text, hit: false }];
 
-	let startFold = folded.indexOf(foldedQuery);
-	let endFold = startFold >= 0 ? startFold + foldedQuery.length : -1;
-
-	if (startFold < 0) {
-		for (const token of foldedQuery.split(' ').filter(Boolean)) {
-			const idx = folded.indexOf(token);
-			if (idx < 0) continue;
-			if (token.length === 1 && !isWordBoundary(folded, idx)) continue;
-			startFold = idx;
-			endFold = idx + token.length;
-			break;
-		}
+	const needles = [foldedQuery, ...foldedQuery.split(' ').filter(Boolean)];
+	const foldRanges: [number, number][] = [];
+	for (const needle of new Set(needles)) {
+		foldRanges.push(...findNeedleRanges(folded, needle));
 	}
 
-	if (startFold < 0) return [{ text, hit: false }];
-
-	const origStart = origIndex[startFold];
-	const lastOrig = origIndex[endFold - 1];
-	let origEnd = lastOrig + 1;
-	while (origEnd < text.length && /[\u0300-\u036f]/.test(text[origEnd])) origEnd++;
+	const merged = mergeFoldRanges(foldRanges);
+	if (merged.length === 0) return [{ text, hit: false }];
 
 	const parts: HighlightPart[] = [];
-	if (origStart > 0) parts.push({ text: text.slice(0, origStart), hit: false });
-	parts.push({ text: text.slice(origStart, origEnd), hit: true });
-	if (origEnd < text.length) parts.push({ text: text.slice(origEnd), hit: false });
+	let cursor = 0;
+	for (const [startFold, endFold] of merged) {
+		const origStart = origIndex[startFold];
+		let origEnd = origIndex[endFold - 1] + 1;
+		while (origEnd < text.length && /[\u0300-\u036f]/.test(text[origEnd])) origEnd++;
+		if (origStart > cursor) parts.push({ text: text.slice(cursor, origStart), hit: false });
+		parts.push({ text: text.slice(origStart, origEnd), hit: true });
+		cursor = origEnd;
+	}
+	if (cursor < text.length) parts.push({ text: text.slice(cursor), hit: false });
 	return parts;
 }
 
@@ -309,8 +337,12 @@ export function searchPodcasts(podcasts: Podcast[], query: string): SearchHit[] 
 				}
 			}
 
+			const titleKindRank = kindRank(titleMatch.kind);
+			const episodeKindRank = kindRank(bestEpisodeKind);
 			let matchField: MatchField | null = null;
-			if (titleMatch.score > 0) matchField = 'title';
+			if (titleKindRank > episodeKindRank) matchField = 'title';
+			else if (episodeKindRank > titleKindRank) matchField = 'episode';
+			else if (titleMatch.score > 0) matchField = 'title';
 			else if (bestEpisodeScore > 0) matchField = 'episode';
 			if (!matchField) continue;
 

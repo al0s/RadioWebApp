@@ -80,7 +80,9 @@ export const en = {
 	},
 	navbar: {
 		goBack: 'Go back',
-		otherLinks: 'Other Links'
+		otherLinks: 'Other Links',
+		search: 'Search',
+		closeSearch: 'Close search'
 	},
 	modals: {
 		externalLinks: 'Other Resources'
