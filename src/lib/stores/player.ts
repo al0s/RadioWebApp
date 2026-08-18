@@ -3,6 +3,7 @@ import { tick } from 'svelte';
 import { settings } from '$lib/stores/settings';
 import { clearSearch } from '$lib/stores/search';
 import { goto } from '$app/navigation';
+import { page } from '$app/state';
 import { podcasts, type Episode, type Podcast } from '$lib/stores/podcast/podcasts';
 import { radios, type Radio } from '$lib/stores/radio/radios';
 import { blinkClasses } from '$lib/util/blinkClassess';
@@ -493,6 +494,12 @@ export function restartRadio() {
 	}
 }
 
+function revealOnHome(task: () => Promise<void>): Promise<void> {
+	// goto('/') from home would replace page.state and close search.
+	if (page.url.pathname === '/') return task();
+	return goto('/').then(task);
+}
+
 // Other player utilities
 export function togglePlaylist(targetPodcastId?: string) {
 	// Player "go to" has no target id; expand/reverse pass one and must keep search.
@@ -504,8 +511,7 @@ export function togglePlaylist(targetPodcastId?: string) {
 	const podcastId = targetPodcastId ?? (state.type === 'podcast' ? state.currentPodcast?.id : null);
 
 	if (podcastId) {
-		// Navigate to main page using SvelteKit's goto
-		goto('/').then(async () => {
+		revealOnHome(async () => {
 			// Ask VirtualLists to ensure the podcast is visible and await completion
 			await ensureVisibleById(podcastId);
 
@@ -567,8 +573,7 @@ export function togglePlaylist(targetPodcastId?: string) {
 			}
 		});
 	} else if (state.type === 'radio' && state.currentRadio) {
-		// Navigate to main page using SvelteKit's goto
-		goto('/').then(async () => {
+		revealOnHome(async () => {
 			// Ask VirtualLists to ensure the radio is visible and await completion
 			if (state.currentRadio) {
 				await ensureVisibleById(state.currentRadio.id);
