@@ -15,8 +15,35 @@
 	let externalLinksModal: ExternalLinksModal;
 	let searchButtonEl: HTMLElement | null = null;
 	let wasSearchOpen = false;
+	let leftGroupEl: HTMLDivElement | null = null;
+	let logoEl: HTMLElement | null = null;
+	let titleMeasureEl: HTMLSpanElement | null = null;
+	let titleFits = false;
+	let scrolled = false;
+	let isMobile = false;
+
+	const MOBILE_MQ = '(max-width: 639px)';
+	const SCROLL_COMPACT_PX = 24;
+	const SCROLL_EXPAND_PX = 8;
+
+	function measureTitleFit() {
+		if (!leftGroupEl || !titleMeasureEl) return;
+		if (leftGroupEl.clientWidth === 0) return;
+		const available = leftGroupEl.clientWidth - (logoEl?.offsetWidth ?? 0);
+		titleFits = titleMeasureEl.offsetWidth <= available;
+	}
+
+	function syncScrollerState(scroller: HTMLElement) {
+		const top = scroller.scrollTop;
+		if (top > SCROLL_COMPACT_PX) scrolled = true;
+		else if (top < SCROLL_EXPAND_PX) scrolled = false;
+	}
 
 	$: searchOpenOnHome = !$showBackButton && $searchOpen;
+	$: compactSearch = isMobile && !$showBackButton && scrolled;
+	$: showSearchField = searchOpenOnHome || compactSearch;
+	$: hideChrome = isMobile && showSearchField;
+	$: searchOpenOnHome, $showBackButton, void tick().then(measureTitleFit);
 
 	$: {
 		if (wasSearchOpen && !$searchOpen) {
@@ -28,6 +55,32 @@
 
 	onMount(() => {
 		showBackButton.set(window.location.pathname !== '/');
+		const resizeObserver = new ResizeObserver(() => measureTitleFit());
+		if (leftGroupEl) resizeObserver.observe(leftGroupEl);
+		if (titleMeasureEl) resizeObserver.observe(titleMeasureEl);
+		window.addEventListener('resize', measureTitleFit);
+		void tick().then(measureTitleFit);
+
+		const mediaQuery = window.matchMedia(MOBILE_MQ);
+		const syncMobile = () => {
+			isMobile = mediaQuery.matches;
+		};
+		syncMobile();
+		mediaQuery.addEventListener('change', syncMobile);
+
+		const scroller = document.querySelector<HTMLElement>('[data-main-scroller]');
+		const onScroll = () => {
+			if (scroller) syncScrollerState(scroller);
+		};
+		scroller?.addEventListener('scroll', onScroll, { passive: true });
+		if (scroller) syncScrollerState(scroller);
+
+		return () => {
+			resizeObserver.disconnect();
+			window.removeEventListener('resize', measureTitleFit);
+			mediaQuery.removeEventListener('change', syncMobile);
+			scroller?.removeEventListener('scroll', onScroll);
+		};
 	});
 
 	beforeNavigate((navigation) => {
@@ -69,12 +122,19 @@
 <svelte:window on:keydown={handleSearchKeydown} />
 
 <div class="flex w-full items-center gap-1 sm:gap-2">
-	<div class="flex shrink-0 items-center {searchOpenOnHome ? 'max-sm:hidden' : ''}">
+	<div
+		bind:this={leftGroupEl}
+		class="relative flex min-w-0 flex-1 items-center overflow-hidden {searchOpenOnHome
+			? 'max-sm:hidden'
+			: ''} {compactSearch ? 'hidden' : ''}"
+	>
 		<TouchableButton
+			bind:el={logoEl}
 			onClick={() => ($showBackButton ? window.history.back() : goto('/'))}
 			ariaLabel={$t.navbar.goBack}
 			circle={false}
 			buttonClassName="px-1"
+			className="shrink-0"
 			size="sm"
 		>
 			{#if $showBackButton}
@@ -88,32 +148,51 @@
 				/>
 			{/if}
 		</TouchableButton>
-		<a href="/" class={`text-l z-10 pl-0 font-bold text-base-content sm:text-2xl`}>
+		<span
+			bind:this={titleMeasureEl}
+			class="pointer-events-none invisible absolute whitespace-nowrap text-base font-bold sm:text-xl"
+			aria-hidden="true"
+		>
 			{config.website.title}
-		</a>
+		</span>
+		{#if titleFits}
+			<a href="/" class="whitespace-nowrap pl-0 text-base font-bold text-base-content sm:text-xl">
+				{config.website.title}
+			</a>
+		{/if}
 	</div>
 
-	<div class="ml-auto flex min-w-0 flex-1 items-center justify-end sm:flex-none">
-		{#if searchOpenOnHome}
+	<div
+		class="ml-auto flex items-center justify-end {showSearchField
+			? 'min-w-0 flex-1'
+			: 'shrink-0'}"
+	>
+		{#if showSearchField}
 			<div
 				role="search"
 				aria-label={$t.home.searchLabel}
-				class="flex min-w-0 flex-1 items-center gap-1 sm:flex-none sm:w-72 md:w-80 lg:w-96"
+				class="flex min-w-0 flex-1 items-center gap-1 {searchOpenOnHome
+					? 'sm:flex-none sm:w-72 md:w-80 lg:w-96'
+					: ''}"
 			>
-				<TouchableButton
-					onClick={closeSearch}
-					ariaLabel={$t.navbar.closeSearch}
-					circle={false}
-					buttonClassName="px-1"
-					size="sm"
-				>
-					<ChevronLeft class="w-[32px]" />
-				</TouchableButton>
+				{#if searchOpenOnHome}
+					<TouchableButton
+						onClick={closeSearch}
+						ariaLabel={$t.navbar.closeSearch}
+						circle={false}
+						buttonClassName="px-1"
+						size="sm"
+					>
+						<ChevronLeft class="w-[32px]" />
+					</TouchableButton>
+				{/if}
 				<SearchInput
 					bind:value={$searchQuery}
 					placeholder={$t.home.searchPlaceholder}
 					ariaLabel={$t.home.searchLabel}
 					clearLabel={$t.home.searchClear}
+					focusOnMount={searchOpenOnHome}
+					onFocus={openSearch}
 				/>
 			</div>
 		{:else if !$showBackButton}
@@ -128,34 +207,36 @@
 			</TouchableButton>
 		{/if}
 
-		{#each config.website.links as link (link.url)}
+		{#if !hideChrome}
+			{#each config.website.links as link (link.url)}
+				<TouchableButton
+					onClick={() => window.open(link.url, '_blank', 'noopener,noreferrer')}
+					ariaLabel={link.iconLabel}
+					circle={false}
+					size="sm"
+				>
+					<svelte:component this={getIconComponent(link.iconLabel)} class="h-5 w-5 sm:h-6 sm:w-6" />
+				</TouchableButton>
+			{/each}
+
 			<TouchableButton
-				onClick={() => window.open(link.url, '_blank', 'noopener,noreferrer')}
-				ariaLabel={link.iconLabel}
+				onClick={() => externalLinksModal.open()}
+				ariaLabel={$t.navbar.otherLinks}
 				circle={false}
 				size="sm"
 			>
-				<svelte:component this={getIconComponent(link.iconLabel)} class="h-5 w-5 sm:h-6 sm:w-6" />
+				<SquareArrowOutUpRight class="h-5 w-5 sm:h-6 sm:w-6" />
 			</TouchableButton>
-		{/each}
 
-		<TouchableButton
-			onClick={() => externalLinksModal.open()}
-			ariaLabel={$t.navbar.otherLinks}
-			circle={false}
-			size="sm"
-		>
-			<SquareArrowOutUpRight class="h-5 w-5 sm:h-6 sm:w-6" />
-		</TouchableButton>
-
-		<TouchableButton
-			onClick={() => goto('/settings')}
-			ariaLabel={$t.settings.title}
-			circle={false}
-			size="sm"
-		>
-			<Settings class="h-5 w-5 sm:h-6 sm:w-6" />
-		</TouchableButton>
+			<TouchableButton
+				onClick={() => goto('/settings')}
+				ariaLabel={$t.settings.title}
+				circle={false}
+				size="sm"
+			>
+				<Settings class="h-5 w-5 sm:h-6 sm:w-6" />
+			</TouchableButton>
+		{/if}
 	</div>
 </div>
 

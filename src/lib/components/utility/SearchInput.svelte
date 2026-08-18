@@ -5,11 +5,13 @@
 	export let placeholder = '';
 	export let ariaLabel = '';
 	export let clearLabel = '';
+	export let focusOnMount = true;
+	export let onFocus: () => void = () => {};
 
 	let inputEl: HTMLInputElement | undefined;
 
 	function autofocusAction(node: HTMLInputElement) {
-		node.focus();
+		if (focusOnMount) node.focus();
 	}
 
 	function clear() {
@@ -33,6 +35,7 @@
 		spellcheck="false"
 		enterkeyhint="search"
 		bind:value
+		on:focus={onFocus}
 	/>
 	{#if value}
 		<button

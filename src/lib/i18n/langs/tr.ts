@@ -28,7 +28,7 @@ export const tr: TranslationType = {
     allStationsInFavorites: 'Tüm istasyonlar favorilerde',
     allArchiveInFavorites: 'Bu arşivin tamamı favorilerde',
     scrollForMoreEpisodes: 'Daha fazla bölüm için kaydırın',
-    allCategories: 'Hepsini Gör',
+    allCategories: 'Tümü',
     searchPlaceholder: 'Podcast veya bölüm ara…',
     searchLabel: 'Arşivde ara',
     searchClear: 'Aramayı temizle',

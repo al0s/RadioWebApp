@@ -171,9 +171,11 @@
 					draggable="false"
 					on:load={() => (imageLoaded = true)}
 				/>
-				<div class="{cardStyles.content.textContainer} min-w-0 overflow-hidden">
+				<div class="flex min-h-24 min-w-0 flex-1 items-center overflow-hidden">
 					<div class="flex min-w-0 items-center gap-2">
-						<h3 class="mt-1 min-w-0 flex-1 truncate text-lg font-bold text-base-content">
+						<h3
+							class="min-w-0 flex-1 break-words text-lg font-bold leading-snug text-base-content line-clamp-3"
+						>
 							{#if highlightQuery}
 								{#each splitHighlight(podcast.title, highlightQuery) as part}
 									{#if part.hit}<span class="text-primary">{part.text}</span>{:else}{part.text}{/if}
@@ -190,9 +192,6 @@
 							</span>
 						{/if}
 					</div>
-					<p class={cardStyles.content.description}>
-						{clampText(podcast.description, 120)}
-					</p>
 				</div>
 			</div>
 		</div>

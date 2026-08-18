@@ -75,7 +75,7 @@
 
 	$: if (typeof window !== 'undefined' && $searchQuery.trim()) {
 		queueMicrotask(() => {
-			const scroller = document.querySelector<HTMLElement>('.grow.overflow-y-auto');
+			const scroller = document.querySelector<HTMLElement>('[data-main-scroller]');
 			scroller?.scrollTo({ top: 0 });
 		});
 	}
