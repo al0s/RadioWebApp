@@ -28,6 +28,7 @@ export const en = {
 		allArchiveInFavorites: 'All of this archive is in favorites',
 		scrollForMoreEpisodes: 'Scroll for more episodes',
 		allCategories: 'All',
+		resetCategoryFilter: 'Reset category filter',
 		uncategorized: 'Uncategorized',
 		searchPlaceholder: 'Search podcasts or episodes…',
 		searchLabel: 'Search archive',

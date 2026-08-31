@@ -6,6 +6,7 @@
 	import { radioFavorites } from '$lib/stores/radio/radioFavorites';
 	import { podcastFavorites } from '$lib/stores/podcast/podcastFavorites';
 	import DropdownSelect from '$lib/components/utility/DropdownSelect.svelte';
+	import TouchableButton from '$lib/components/utility/TouchableButton.svelte';
 	import { config } from '$lib/config';
 	import { togglePlaylist } from '$lib/stores/player';
 	import { radios, type Radio } from '$lib/stores/radio/radios';
@@ -17,10 +18,17 @@
 	import VirtualList from '$lib/components/utility/VirtualList.svelte';
 	import { searchPodcasts, type SearchHit } from '$lib/util/search';
 	import { searchQuery } from '$lib/stores/search';
+	import { Archive, ChevronDown, Radio as RadioIcon, RotateCcw } from 'lucide-svelte';
 
 	let expandedPodcasts = new Set<string>();
 	let headerClasses = 'mb-2 sm:mb-4';
+	let archiveSectionClasses = 'pt-6 sm:pt-8';
+	let archiveFilterSpacingClasses = 'pb-6 sm:pb-8';
 	let headerTextClasses = 'text-2xl font-bold';
+	let sectionLabelClasses = 'text-base font-semibold text-base-content';
+	let sectionIconClasses = 'h-5 w-5 shrink-0 text-primary';
+	let categoryFilterButtonClasses =
+		'btn btn-sm inline-flex h-10 min-h-10 items-center gap-2 border border-base-300 bg-base-200 px-3 shadow-sm hover:bg-base-300 hover:shadow-md sm:px-4';
 	let categoryHeaderClasses =
 		'mb-2 flex items-center gap-3 border-b border-base-content/15 pb-2 sm:mb-4 sm:pb-3';
 	let categoryTitleClasses = 'text-base font-semibold text-base-content';
@@ -221,7 +229,10 @@
 		<div class="divider"></div>
 	{/if}
 
-	<h2 class={[headerClasses, headerTextClasses]}>{$t.home.radio}</h2>
+	<div class="flex items-center gap-2 sm:gap-3 {headerClasses}">
+		<RadioIcon class={sectionIconClasses} aria-hidden="true" />
+		<h2 class={sectionLabelClasses}>{$t.home.radio}</h2>
+	</div>
 	<div class={sectionClasses}>
 		{#if $radios.length === 0}
 			{#each Array(4) as _}
@@ -241,16 +252,6 @@
 	<div class="divider"></div>
 {/if}
 
-<div class="flex items-center justify-between {headerClasses}">
-	<h2 class={[headerTextClasses]}>{$t.home.archive}</h2>
-	<DropdownSelect
-		value={$settings.selectedCategory}
-		onChange={(value) => settings.updateSettings({ selectedCategory: value })}
-		options={categoryOptions}
-		backgroundColor="bg-base-200"
-		specialFirstOption={true}
-	/>
-</div>
 {#snippet podcastGrid(items: Podcast[])}
 	<div class={sectionClasses}>
 		<VirtualList {items} estimatedItemHeight={97.5}>
@@ -269,6 +270,40 @@
 		</VirtualList>
 	</div>
 {/snippet}
+
+<section class={archiveSectionClasses}>
+	<div class={archiveFilterSpacingClasses}>
+		<div class="flex items-center gap-2">
+			<DropdownSelect
+				value={$settings.selectedCategory}
+				onChange={(value) => settings.updateSettings({ selectedCategory: value })}
+				options={categoryOptions}
+				backgroundColor="bg-base-200"
+				specialFirstOption={true}
+				matchOptionWidth={true}
+				width="w-auto"
+			>
+				<div slot="trigger" class={categoryFilterButtonClasses}>
+					<Archive class="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+					<span class="font-semibold">{$t.home.archive}</span>
+					<span class="h-4 w-px shrink-0 bg-base-content/20" aria-hidden="true"></span>
+					<span class="font-medium"
+						>{categoryOptions.find((o) => o.value === $settings.selectedCategory)?.label}</span
+					>
+					<ChevronDown class="h-4 w-4 shrink-0 opacity-80" />
+				</div>
+			</DropdownSelect>
+			{#if $settings.selectedCategory !== ALL_CATEGORY}
+				<TouchableButton
+					size="sm"
+					ariaLabel={$t.home.resetCategoryFilter}
+					onClick={() => settings.updateSettings({ selectedCategory: ALL_CATEGORY })}
+				>
+					<RotateCcw class="h-4 w-4" />
+				</TouchableButton>
+			{/if}
+		</div>
+	</div>
 
 {#if $podcasts.length === 0}
 	<div class={sectionClasses}>
@@ -307,3 +342,4 @@
 {:else}
 	{@render podcastGrid(archivePodcasts)}
 {/if}
+</section>
