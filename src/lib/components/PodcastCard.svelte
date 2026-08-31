@@ -198,7 +198,10 @@
 			</div>
 		</div>
 		<div class="collapse-content relative">
-			<div class="flex justify-end">
+			<div class="flex items-center justify-end">
+				<span class="mr-2 text-sm text-base-content-secondary tabular-nums">
+					{formatString($t.podcast.episodeCount, { count: podcast.items.length })}
+				</span>
 				<TouchableButton
 					onClick={() => infoModal.open()}
 					circle={false}

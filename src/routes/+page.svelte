@@ -21,8 +21,12 @@
 	let expandedPodcasts = new Set<string>();
 	let headerClasses = 'mb-2 sm:mb-4';
 	let headerTextClasses = 'text-2xl font-bold';
+	let categoryHeaderClasses =
+		'mb-2 flex items-center gap-3 border-b border-base-content/15 pb-2 sm:mb-4 sm:pb-3';
+	let categoryTitleClasses = 'text-base font-semibold text-base-content';
 	let sectionClasses = 'grid grid-cols-1 items-start gap-2 sm:gap-4 lg:grid-cols-2 2xl:grid-cols-3';
 	const ALL_CATEGORY = 'All'; // Keep this as a constant for comparison
+	const UNCategorized = '__uncategorized__';
 
 	let lastSearchKey = '';
 
@@ -67,6 +71,37 @@
 		.filter((hit) => hit.matchKind === 'similar')
 		.map((hit) => hit.podcast);
 	$: archivePodcasts = isSearching ? searchHits.map((hit) => hit.podcast) : otherPodcasts;
+
+	function getPrimaryCategory(podcast: Podcast): string {
+		const visible = podcast.categories.filter(
+			(cat) => !config.podcast.bypassCategories.includes(cat)
+		);
+		if (visible.length === 0) return UNCategorized;
+		return visible[0];
+	}
+
+	$: archiveCategoryOrder = (() => {
+		const seen = new Set<string>();
+		const order: string[] = [];
+		for (const podcast of otherPodcasts) {
+			const cat = getPrimaryCategory(podcast);
+			if (!seen.has(cat)) {
+				seen.add(cat);
+				order.push(cat);
+			}
+		}
+		return order;
+	})();
+
+	$: archiveGroups =
+		selectedCategory === ALL_CATEGORY && !isSearching
+			? archiveCategoryOrder
+					.map((cat) => ({
+						category: cat,
+						podcasts: otherPodcasts.filter((p) => getPrimaryCategory(p) === cat)
+					}))
+					.filter((g) => g.podcasts.length > 0)
+			: [];
 
 	$: if ($searchQuery !== lastSearchKey) {
 		const previousQuery = lastSearchKey;
@@ -259,6 +294,16 @@
 	{/if}
 {:else if archivePodcasts.length === 0}
 	<p class="text-base-content-secondary">{$t.home.allArchiveInFavorites}</p>
+{:else if selectedCategory === ALL_CATEGORY}
+	{#each archiveGroups as group, i (group.category)}
+		<div class="{i > 0 ? 'mt-4 sm:mt-6' : ''} {categoryHeaderClasses}">
+			<span class="h-4 w-1 shrink-0 rounded-full bg-primary" aria-hidden="true"></span>
+			<h3 class={categoryTitleClasses}>
+				{group.category === UNCategorized ? $t.home.uncategorized : group.category}
+			</h3>
+		</div>
+		{@render podcastGrid(group.podcasts)}
+	{/each}
 {:else}
 	{@render podcastGrid(archivePodcasts)}
 {/if}
