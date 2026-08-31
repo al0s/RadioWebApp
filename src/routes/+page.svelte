@@ -18,13 +18,12 @@
 	import VirtualList from '$lib/components/utility/VirtualList.svelte';
 	import { searchPodcasts, type SearchHit } from '$lib/util/search';
 	import { searchQuery } from '$lib/stores/search';
-	import { Archive, ChevronDown, Radio as RadioIcon, RotateCcw } from 'lucide-svelte';
+	import { Archive, ChevronDown, Radio as RadioIcon, RotateCcw, Star } from 'lucide-svelte';
 
 	let expandedPodcasts = new Set<string>();
 	let headerClasses = 'mb-2 sm:mb-4';
 	let archiveSectionClasses = 'pt-6 sm:pt-8';
 	let archiveFilterSpacingClasses = 'pb-6 sm:pb-8';
-	let headerTextClasses = 'text-2xl font-bold';
 	let sectionLabelClasses = 'text-base font-semibold text-base-content';
 	let sectionIconClasses = 'h-5 w-5 shrink-0 text-primary';
 	let categoryFilterButtonClasses =
@@ -211,7 +210,10 @@
 
 {#if !isSearching}
 	{#if favoriteRadios.length > 0 || favoritePodcasts.length > 0}
-		<h2 class={[headerClasses, headerTextClasses]}>{$t.home.favorites}</h2>
+		<div class="flex items-center gap-2 sm:gap-3 {headerClasses}">
+			<Star class={sectionIconClasses} aria-hidden="true" />
+			<h2 class={sectionLabelClasses}>{$t.home.favorites}</h2>
+		</div>
 		<div class={sectionClasses}>
 			{#each favoriteRadios as radio (radio.title)}
 				<RadioCard {radio} />
