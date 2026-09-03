@@ -125,7 +125,7 @@ export async function fetchPodcast(url: string): Promise<Podcast | null> {
 // Limit how many RSS feeds are fetched/parsed at the same time to reduce peak
 // memory usage on low-RAM devices.
 const FETCH_CONCURRENCY = 10;
-const REFRESH_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
 const LAST_REFRESH_KEY = 'podcasts-last-refresh';
 
 function readLastRefreshAt(): number {
