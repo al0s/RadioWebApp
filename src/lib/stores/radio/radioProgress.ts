@@ -8,8 +8,18 @@ export interface RadioProgress {
 	};
 }
 
+/** Keep Continue Listening strip bounded (same cap as podcasts). */
+export const MAX_RADIO_PROGRESS_ENTRIES = 10;
+
+function pruneRadioProgress(progress: RadioProgress): RadioProgress {
+	const entries = Object.entries(progress);
+	if (entries.length <= MAX_RADIO_PROGRESS_ENTRIES) return progress;
+	entries.sort((a, b) => b[1].lastPlayed - a[1].lastPlayed);
+	return Object.fromEntries(entries.slice(0, MAX_RADIO_PROGRESS_ENTRIES));
+}
+
 function createRadioProgressStore() {
-	const initialState: RadioProgress = getUserData('radio-progress');
+	const initialState: RadioProgress = pruneRadioProgress(getUserData('radio-progress'));
 
 	const { subscribe, update } = writable<RadioProgress>(initialState);
 
@@ -17,15 +27,19 @@ function createRadioProgressStore() {
 		setUserData('radio-progress', value);
 	});
 
-	refreshStoreAfterGoogleFetch('radio-progress', update);
+	refreshStoreAfterGoogleFetch('radio-progress', (fn) => {
+		update((current) => pruneRadioProgress(fn(current)));
+	});
 
 	const updateRadioProgress = (radioId: string) => {
-		update((progress) => ({
-			...progress,
-			[radioId]: {
-				lastPlayed: Date.now()
-			}
-		}));
+		update((progress) =>
+			pruneRadioProgress({
+				...progress,
+				[radioId]: {
+					lastPlayed: Date.now()
+				}
+			})
+		);
 	};
 
 	function removeRadioProgress(radioId: string) {

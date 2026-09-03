@@ -9,6 +9,7 @@
 	import { fade } from 'svelte/transition';
 	import PodcastInfoModal from '$lib/components/modals/PodcastInfoModal.svelte';
 	import type { Episode, Podcast } from '$lib/stores/podcast/podcasts';
+	import { podcasts } from '$lib/stores/podcast/podcasts';
 	import { formatString, t } from '$lib/i18n';
 	import { sharePodcast, copyTextToClipboard } from '$lib/util/share';
 	import { showTooltip } from '$lib/util/tooltip';
@@ -24,6 +25,7 @@
 	export let highlightQuery = '';
 
 	let imageLoaded = false;
+	let loadingFull = false;
 
 	let visibleEpisodes: Episode[] = [];
 	let isReversed = false;
@@ -35,6 +37,31 @@
 		$playerStore.type === 'podcast' && $playerStore.currentPodcast?.id === podcast.id
 			? ($playerStore.currentEpisode?.id ?? null)
 			: null;
+
+	async function ensurePlayablePodcast(): Promise<Podcast> {
+		if (podcast.items.every((ep) => ep.url)) return podcast;
+		loadingFull = true;
+		try {
+			const full = await podcasts.ensureFull(podcast);
+			return full ?? podcast;
+		} finally {
+			loadingFull = false;
+		}
+	}
+
+	async function playEpisode(episode: Episode) {
+		const full = await ensurePlayablePodcast();
+		const fresh = full.items.find((ep) => ep.id === episode.id) ?? episode;
+		if (!fresh.url) return;
+		playerStore.playPodcast(full, fresh);
+	}
+
+	async function handleExpandChange(checked: boolean) {
+		onExpand(podcast.id, checked);
+		if (checked) {
+			await ensurePlayablePodcast();
+		}
+	}
 
 	function getEpisodeClasses(episode: Episode, activeId: string | null) {
 		const isActive = episode.id === activeId;
@@ -160,7 +187,7 @@
 			type="checkbox"
 			aria-label={`${podcast.title} podcast expand button`}
 			checked={expanded}
-			on:change={(e) => onExpand(podcast.id, e.currentTarget.checked)}
+			on:change={(e) => handleExpandChange(e.currentTarget.checked)}
 		/>
 		<div class="collapse-title min-w-0 max-w-full overflow-hidden p-0 pr-8">
 			<div class="{cardStyles.content.wrapper} w-full">
@@ -235,7 +262,8 @@
 						<button
 							data-episode-id={episode.id}
 							class={getEpisodeClasses(episode, activeEpisodeId)}
-							on:click={() => playerStore.playPodcast(podcast, episode)}
+							disabled={loadingFull}
+							on:click={() => playEpisode(episode)}
 						>
 							<div class="grid grid-cols-[1fr_auto] gap-x-0 gap-y-2">
 								<span class="line-clamp-2 font-medium">

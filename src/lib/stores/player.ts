@@ -226,7 +226,9 @@ function createPlayerStore() {
 		if (state.type === 'radio') {
 			shouldUpdateSource = !audio.src || audio.src !== state.currentRadio.streamUrl;
 		} else if (state.type === 'podcast') {
-			shouldUpdateSource = !audio.src || audio.src !== state.currentEpisode.url;
+			shouldUpdateSource =
+				Boolean(state.currentEpisode.url) &&
+				(!audio.src || audio.src !== state.currentEpisode.url);
 		}
 
 		// Update source if needed
@@ -236,7 +238,7 @@ function createPlayerStore() {
 				audio.src = state.currentRadio.streamUrl;
 				audio.playbackRate = 1;
 				radioProgress.updateRadioProgress(state.currentRadio.id);
-			} else if (state.type === 'podcast') {
+			} else if (state.type === 'podcast' && state.currentEpisode.url) {
 				console.log('playing podcast', state.currentEpisode.url);
 				audio.src = state.currentEpisode.url;
 				podcastProgress.updatePodcastProgress(state.currentPodcast.id, state.currentEpisode.id, 0);
@@ -279,9 +281,18 @@ function createPlayerStore() {
 		toggleAudioWhenReady(true);
 	}
 
-	function playPodcast(podcast: Podcast, startWithEpisode?: Episode, startWithTime: number = 0) {
-		const episodeToPlay = startWithEpisode || podcast.items[0];
-		if (!episodeToPlay) return;
+	async function playPodcast(
+		podcast: Podcast,
+		startWithEpisode?: Episode,
+		startWithTime: number = 0
+	) {
+		const full = (await podcasts.ensureFull(podcast)) ?? podcast;
+		const episodeToPlay =
+			(startWithEpisode &&
+				full.items.find((ep) => ep.id === startWithEpisode.id)) ||
+			startWithEpisode ||
+			full.items[0];
+		if (!episodeToPlay?.url) return;
 
 		update(
 			(state): PodcastPlayerState => ({
@@ -289,9 +300,9 @@ function createPlayerStore() {
 				type: 'podcast',
 				currentTime: startWithTime,
 				currentRadio: null,
-				currentPodcast: podcast,
+				currentPodcast: full,
 				currentEpisode: episodeToPlay,
-				playlist: podcast.items,
+				playlist: full.items,
 				duration: episodeToPlay.duration ? Number(episodeToPlay.duration) : 0
 			})
 		);
@@ -653,11 +664,12 @@ export async function autoplayLastContent() {
 			const radio = await get(radios).find((r) => r.id === lastPlayedRadio.id);
 			if (radio) playerStore.playRadio(radio);
 		} else {
-			const podcast = await get(podcasts).find((p: Podcast) => p.id === lastPlayedPodcast.id);
+			const podcast = get(podcasts).find((p: Podcast) => p.id === lastPlayedPodcast.id);
 			if (podcast) {
-				const episode = podcast.items.find((e: Episode) => e.id === lastPlayedPodcast.episodeId);
-				if (episode) {
-					playerStore.playPodcast(podcast, episode, lastPlayedPodcast.timestamp);
+				const full = (await podcasts.ensureFull(podcast)) ?? podcast;
+				const episode = full.items.find((e: Episode) => e.id === lastPlayedPodcast.episodeId);
+				if (episode?.url) {
+					playerStore.playPodcast(full, episode, lastPlayedPodcast.timestamp);
 				}
 			}
 		}
@@ -673,11 +685,12 @@ export async function autoplayLastContent() {
 
 	// If only podcast exists
 	if (lastPlayedPodcast) {
-		const podcast = await get(podcasts).find((p: Podcast) => p.id === lastPlayedPodcast.id);
+		const podcast = get(podcasts).find((p: Podcast) => p.id === lastPlayedPodcast.id);
 		if (podcast) {
-			const episode = podcast.items.find((e: Episode) => e.id === lastPlayedPodcast.episodeId);
-			if (episode) {
-				playerStore.playPodcast(podcast, episode, lastPlayedPodcast.timestamp);
+			const full = (await podcasts.ensureFull(podcast)) ?? podcast;
+			const episode = full.items.find((e: Episode) => e.id === lastPlayedPodcast.episodeId);
+			if (episode?.url) {
+				playerStore.playPodcast(full, episode, lastPlayedPodcast.timestamp);
 			}
 		}
 	}

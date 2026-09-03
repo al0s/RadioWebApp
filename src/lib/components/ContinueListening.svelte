@@ -137,14 +137,15 @@
 		setTimeout(onScroll, 0);
 	}
 
-	function handleItemClick(item: ContinueListeningItem) {
+	async function handleItemClick(item: ContinueListeningItem) {
 		if (isEditMode) {
 			return;
 		}
 		if (item.type === 'podcast') {
-			const episode = item.item.items.find((ep: Episode) => ep.id === item.item.episodeId);
-			if (episode) {
-				playerStore.playPodcast(item.item, episode, item.item.timestamp);
+			const full = (await podcasts.ensureFull(item.item)) ?? item.item;
+			const episode = full.items.find((ep: Episode) => ep.id === item.item.episodeId);
+			if (episode?.url) {
+				playerStore.playPodcast(full, episode, item.item.timestamp);
 			}
 		} else {
 			playerStore.playRadio(item.item);

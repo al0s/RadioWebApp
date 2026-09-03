@@ -64,19 +64,21 @@ export function setUserData<K extends keyof UserData>(
 	key: K,
 	data: UserData[K],
 	saveToGoogle = true
-) {
+): boolean {
 	if (typeof window === 'undefined') {
-		return;
+		return false;
 	}
 	try {
 		const currentData = getUserData(key);
-		if (JSON.stringify(currentData) === JSON.stringify(data)) return;
+		if (JSON.stringify(currentData) === JSON.stringify(data)) return true;
 		// console.log(`Setting user data: ${saveToGoogle} - ${key} - ${JSON.stringify(data, null, 2)}`);
 		localStorage.setItem(key, JSON.stringify(data));
 		if (saveToGoogle) {
 			saveUserDataToGoogle(key, data);
 		}
+		return true;
 	} catch (error) {
 		console.error(`Error setting user data for key ${key}:`, error);
+		return false;
 	}
 }

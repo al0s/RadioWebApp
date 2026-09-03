@@ -4,6 +4,7 @@ import { config } from '$lib/config';
 import { getUserData, setUserData } from '$lib/util/userData';
 import { withBackoff } from '$lib/util/backoff';
 import { throttleDebounce } from '$lib/util/throttleDebounce';
+import type { PodcastProgress } from '$lib/stores/podcast/podcastProgress';
 
 export interface Podcast {
 	id: string;
@@ -19,12 +20,16 @@ export interface Podcast {
 export interface Episode {
 	id: string;
 	title: string;
-	url: string;
+	/** Omitted in cache for older episodes to stay under localStorage quota. */
+	url?: string;
 	duration?: string;
 	image?: string;
 	description?: string;
 	pubDate?: string;
 }
+
+/** How many leading episodes keep url/duration/pubDate in localStorage. */
+export const CACHE_FULL_EPISODE_COUNT = 30;
 
 function rssText(value: unknown): string | undefined {
 	if (typeof value === 'string' || typeof value === 'number') return String(value);
@@ -32,6 +37,12 @@ function rssText(value: unknown): string | undefined {
 		return rssText((value as { '#text': unknown })['#text']);
 	}
 	return undefined;
+}
+
+export function episodeHasPlayableUrl(
+	episode: Episode | undefined
+): episode is Episode & { url: string } {
+	return Boolean(episode?.url);
 }
 
 export async function getPodcastRssUrls() {
@@ -140,16 +151,137 @@ function writeLastRefreshAt(timestamp: number) {
 	localStorage.setItem(LAST_REFRESH_KEY, String(timestamp));
 }
 
+function progressEpisodeIdByPodcast(): Map<string, string> {
+	const progress = getUserData('podcast-progress') as PodcastProgress;
+	const map = new Map<string, string>();
+	for (const [podcastId, ep] of Object.entries(progress ?? {})) {
+		if (ep?.episodeId) map.set(podcastId, ep.episodeId);
+	}
+	return map;
+}
+
+/**
+ * Cache keeps every episode title (search), but only recent / in-progress
+ * episodes keep playable urls so localStorage stays under quota.
+ */
+export function slimPodcastForCache(
+	podcast: Podcast,
+	progressEpisodeId?: string
+): Podcast {
+	return {
+		id: podcast.id,
+		title: podcast.title,
+		description: podcast.description ?? '',
+		imageUrl: podcast.imageUrl,
+		categories: podcast.categories,
+		rssUrl: podcast.rssUrl,
+		lastFetched: podcast.lastFetched,
+		items: podcast.items.map((episode, index) => {
+			const keepFull =
+				Boolean(episode.url) &&
+				(index < CACHE_FULL_EPISODE_COUNT || episode.id === progressEpisodeId);
+
+			if (keepFull) {
+				return {
+					id: episode.id,
+					title: episode.title,
+					url: episode.url,
+					duration: episode.duration,
+					pubDate: episode.pubDate
+				};
+			}
+
+			return {
+				id: episode.id,
+				title: episode.title
+			};
+		})
+	};
+}
+
 function createPodcastsStore() {
 	const { subscribe, set, update } = writable<Podcast[]>([]);
+	let latestPodcasts: Podcast[] = [];
 	let refreshInFlight = false;
 	let lastRefreshAt = readLastRefreshAt();
+	const ensureInFlight = new Map<string, Promise<Podcast | null>>();
+
+	subscribe((value) => {
+		latestPodcasts = value;
+	});
 
 	function hydrateFromCache() {
 		const cachedPodcasts = getUserData('cached-podcasts') as Podcast[];
 		if (cachedPodcasts.length > 0) {
 			set(cachedPodcasts);
 		}
+	}
+
+	function orderPodcasts(
+		feedUrls: string[],
+		fetchedPodcastMap: Map<string, Podcast>,
+		existing: Podcast[]
+	): Podcast[] {
+		const existingPodcastsMap = new Map<string, Podcast>();
+		existing.forEach((podcast) => {
+			existingPodcastsMap.set(podcast.rssUrl, podcast);
+		});
+
+		const orderedPodcasts: Podcast[] = [];
+		for (const url of feedUrls) {
+			const podcast = fetchedPodcastMap.get(url) ?? existingPodcastsMap.get(url);
+			if (podcast) {
+				orderedPodcasts.push(podcast);
+			}
+		}
+		return orderedPodcasts;
+	}
+
+	function persistPodcastCache(podcastList: Podcast[]): boolean {
+		const progressIds = progressEpisodeIdByPodcast();
+		return setUserData(
+			'cached-podcasts',
+			podcastList.map((podcast) =>
+				slimPodcastForCache(podcast, progressIds.get(podcast.id))
+			)
+		);
+	}
+
+	function mergePodcast(podcast: Podcast) {
+		update((list) => {
+			const index = list.findIndex(
+				(p) => p.id === podcast.id || p.rssUrl === podcast.rssUrl
+			);
+			const next =
+				index >= 0
+					? list.map((p, i) => (i === index ? podcast : p))
+					: [...list, podcast];
+			persistPodcastCache(next);
+			return next;
+		});
+	}
+
+	/** Refetch RSS when cached episodes lack playable urls. */
+	async function ensureFull(podcast: Podcast): Promise<Podcast | null> {
+		if (podcast.items.length > 0 && podcast.items.every((ep) => ep.url)) {
+			return podcast;
+		}
+
+		const key = podcast.rssUrl;
+		const existing = ensureInFlight.get(key);
+		if (existing) return existing;
+
+		const promise = fetchPodcast(key)
+			.then((fetched) => {
+				if (fetched) mergePodcast(fetched);
+				return fetched;
+			})
+			.finally(() => {
+				ensureInFlight.delete(key);
+			});
+
+		ensureInFlight.set(key, promise);
+		return promise;
 	}
 
 	async function refresh(force = false) {
@@ -165,25 +297,13 @@ function createPodcastsStore() {
 
 			const throttledUpdate = throttleDebounce(
 				() => {
-					update((podcasts) => {
-						const orderedPodcasts: Podcast[] = [];
-
-						const existingPodcastsMap = new Map<string, Podcast>();
-						podcasts.forEach((podcast) => {
-							existingPodcastsMap.set(podcast.rssUrl, podcast);
-						});
-
-						for (let i = 0; i < feedUrls.length; i++) {
-							const url = feedUrls[i];
-							const podcast = fetchedPodcastMap.get(url) ?? existingPodcastsMap.get(url);
-
-							if (podcast) {
-								orderedPodcasts.push(podcast);
-							}
-						}
-
-						setUserData('cached-podcasts', orderedPodcasts.slice(0, 150));
-
+					update((podcastList) => {
+						const orderedPodcasts = orderPodcasts(
+							feedUrls,
+							fetchedPodcastMap,
+							podcastList
+						);
+						persistPodcastCache(orderedPodcasts);
 						return orderedPodcasts;
 					});
 				},
@@ -214,7 +334,16 @@ function createPodcastsStore() {
 			);
 			await Promise.all(workers);
 
-			if (fetchedPodcastMap.size > 0) {
+			// Final write (throttled updates may still be pending / mid-run)
+			let cacheSaved = false;
+			update((podcastList) => {
+				const orderedPodcasts = orderPodcasts(feedUrls, fetchedPodcastMap, podcastList);
+				cacheSaved = persistPodcastCache(orderedPodcasts);
+				return orderedPodcasts;
+			});
+
+			// Only mark refresh complete if the catalog actually fit in storage
+			if (cacheSaved) {
 				lastRefreshAt = Date.now();
 				writeLastRefreshAt(lastRefreshAt);
 			}
@@ -232,7 +361,10 @@ function createPodcastsStore() {
 	}
 
 	return {
-		subscribe
+		subscribe,
+		ensureFull,
+		mergePodcast,
+		getAll: () => latestPodcasts
 	};
 }
 

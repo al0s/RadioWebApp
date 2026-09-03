@@ -133,15 +133,16 @@
 		return searchHitById.get(podcast.id);
 	}
 
-	function tryHandleShare() {
+	async function tryHandleShare() {
 		if (sharedPodcastId) {
 			const podcast = get(podcasts).find((p) => p.id === sharedPodcastId);
 			if (podcast) {
-				const episode = podcast.items.find(
-					(e) => e.id === (sharedEpisodeId ?? podcast.items[0].id)
+				const full = (await podcasts.ensureFull(podcast)) ?? podcast;
+				const episode = full.items.find(
+					(e) => e.id === (sharedEpisodeId ?? full.items[0].id)
 				);
-				if (episode) {
-					playerStore.playPodcast(podcast, episode, sharedTimeSeconds);
+				if (episode?.url) {
+					await playerStore.playPodcast(full, episode, sharedTimeSeconds);
 					togglePlaylist(sharedPodcastId);
 					return true;
 				}
@@ -173,7 +174,9 @@
 			return;
 		}
 
-		shareHandled = tryHandleShare();
+		void tryHandleShare().then((ok) => {
+			shareHandled = ok;
+		});
 	});
 
 	$: if (
@@ -181,7 +184,10 @@
 		typeof window !== 'undefined' &&
 		((sharedPodcastId && $podcasts.length > 0) || (sharedRadioId && $radios.length > 0))
 	) {
-		shareHandled = tryHandleShare();
+		shareHandled = true; // prevent re-entry while resolving
+		void tryHandleShare().then((ok) => {
+			if (!ok) shareHandled = false;
+		});
 	}
 
 	function handlePodcastExpand(podcastId: string, isExpanded: boolean) {
