@@ -8,7 +8,7 @@ import { podcasts, type Episode, type Podcast } from '$lib/stores/podcast/podcas
 import { radios, type Radio } from '$lib/stores/radio/radios';
 import { blinkClasses } from '$lib/util/blinkClassess';
 import { scrollIntoViewPromise } from '$lib/util/scrollIntoViewPromised';
-import { podcastProgress } from '$lib/stores/podcast/podcastProgress';
+import { podcastProgress, getEpisodeProgressTimestamp, getLatestEpisodeProgress, resolveResumeTimestamp } from '$lib/stores/podcast/podcastProgress';
 import { radioProgress } from '$lib/stores/radio/radioProgress';
 import { initMediaSession, updateMediaSessionMetadata } from '$lib/util/media_session';
 
@@ -63,6 +63,11 @@ function readyStateIsAbleToPlay(readyState: number) {
 // Initialize audio only in browser environment
 let audio: HTMLAudioElement | undefined;
 let resetAudioInterval: NodeJS.Timeout | undefined;
+/** Last trusted playback position (ignores network-driven jumps to 100%). */
+let lastKnownGoodTime = 0;
+/** Timestamp of last media error — used to ignore false "ended" after failures. */
+let lastMediaErrorAt = 0;
+let recoveryInFlight = false;
 
 if (typeof window !== 'undefined') {
 	initAudio();
@@ -90,17 +95,37 @@ function initAudio() {
 	});
 
 	audio.addEventListener('timeupdate', () => {
-		playerStore.updateCurrentTime();
-		if (resetAudioInterval && readyStateIsAbleToPlay(audio?.readyState ?? 0)) {
+		if (!audio) return;
+		const currentState = get(playerStore);
+		// On network failure browsers pause and snap currentTime → duration (100% bar).
+		// Only accept time while actively playing with no media error.
+		if (
+			currentState.errored ||
+			recoveryInFlight ||
+			audio.error ||
+			audio.paused ||
+			audio.ended
+		) {
+			return;
+		}
+
+		const t = audio.currentTime ?? 0;
+		// Reject absurd forward jumps; intentional seeks go through seekTo().
+		if (lastKnownGoodTime > 0 && t - lastKnownGoodTime > 5) {
+			return;
+		}
+
+		lastKnownGoodTime = t;
+		playerStore.updateCurrentTime(t, true);
+		if (resetAudioInterval && readyStateIsAbleToPlay(audio.readyState)) {
 			clearInterval(resetAudioInterval);
 		}
 
-		const currentState = get(playerStore);
 		if (currentState.type === 'podcast') {
 			podcastProgress.updatePodcastProgress(
 				currentState.currentPodcast.id,
 				currentState.currentEpisode.id,
-				audio?.currentTime ?? 0
+				t
 			);
 		}
 	});
@@ -124,6 +149,13 @@ function initAudio() {
 	audio.addEventListener('playing', () => {
 		playerStore.setBuffering(false);
 		playerStore.setErrored(false);
+		recoveryInFlight = false;
+		lastMediaErrorAt = 0;
+		clearAutoRetry();
+		if (resetAudioInterval) {
+			clearInterval(resetAudioInterval);
+			resetAudioInterval = undefined;
+		}
 	});
 	// suspend happens when the download happens and is paused until the player reaches the point of the download
 	// audio.addEventListener('suspend', () => {
@@ -135,23 +167,84 @@ function initAudio() {
 			clearInterval(resetAudioInterval);
 		}
 		resetAudioInterval = setInterval(() => {
-			resetAudio();
+			void recoverPlayback();
 		}, 4000);
 	});
 
 	audio.addEventListener('error', () => {
-		playerStore.setErrored();
+		recoveryInFlight = false;
+		lastMediaErrorAt = Date.now();
+
+		const state = get(playerStore);
+		const restoreAt = lastKnownGoodTime;
+		// Hard-freeze UI/progress at last trusted position (never 100% snap).
+		if (state.type === 'podcast' && state.currentEpisode) {
+			playerStore.updateCurrentTime(restoreAt, true);
+			podcastProgress.updatePodcastProgress(
+				state.currentPodcast.id,
+				state.currentEpisode.id,
+				restoreAt
+			);
+		} else {
+			playerStore.updateCurrentTime(restoreAt, true);
+		}
+
+		playerStore.setErrored(true);
+		scheduleAutoRetry();
 	});
-	audio.addEventListener('abort', () => {
-		playerStore.setErrored();
-	});
+	// Do not treat abort as an error — changing audio.src / load() aborts the prior request.
 
 	audio.addEventListener('ended', () => {
+		const state = get(playerStore);
+		if (state.type !== 'podcast') return;
+
+		// recoverPlayback() clears src and can fire a spurious "ended" — never advance then.
+		if (recoveryInFlight) {
+			return;
+		}
+
+		// Network/decode failures often emit "ended" after "error", sometimes much later once
+		// the connection returns. Never treat those as episode completion.
+		if (lastMediaErrorAt > 0 && Date.now() - lastMediaErrorAt < 60_000) {
+			playerStore.setErrored(true);
+			scheduleAutoRetry();
+			return;
+		}
+
+		if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+			playerStore.setErrored(true);
+			scheduleAutoRetry();
+			return;
+		}
+
+		const duration =
+			Number.isFinite(audio?.duration) && (audio?.duration ?? 0) > 0
+				? (audio?.duration as number)
+				: state.duration;
+		// Use last known *good* position only — state/audio time may already be corrupted to 100%.
+		const currentTime = lastKnownGoodTime > 0 ? lastKnownGoodTime : state.currentTime;
+		const nearEnd =
+			Number.isFinite(duration) && duration > 0 && currentTime >= Math.max(0, duration - 3);
+
+		const src = audio?.getAttribute('src') || '';
+		if (!src || !nearEnd) {
+			playerStore.setErrored(true);
+			scheduleAutoRetry();
+			return;
+		}
+
+		// Genuine end of episode → mark finished and optionally advance.
+		lastMediaErrorAt = 0;
+		podcastProgress.updatePodcastProgress(state.currentPodcast.id, state.currentEpisode.id, 0);
 		playerStore.nextTrack(get(settings).autoplay);
 	});
 
 	audio.addEventListener('pause', () => {
 		playerStore.updateIsPlaying();
+		// If pause is from a failure snap, keep the bar where it was.
+		if (lastKnownGoodTime >= 0 && (get(playerStore).errored || audio?.error)) {
+			playerStore.updateCurrentTime(lastKnownGoodTime, true);
+		}
 	});
 	audio.addEventListener('play', () => {
 		playerStore.updateIsPlaying();
@@ -172,7 +265,9 @@ function toggleAudioWhenReady(value?: boolean, retries: number = 0) {
 					if (e.name === 'NotAllowedError') {
 						playerStore.setMuted();
 					} else {
-						playerStore.setErrored();
+						lastMediaErrorAt = Date.now();
+						playerStore.setErrored(true);
+						scheduleAutoRetry();
 					}
 				});
 			} else {
@@ -181,21 +276,149 @@ function toggleAudioWhenReady(value?: boolean, retries: number = 0) {
 		}
 	}, 0);
 }
-function resetAudio() {
-	if (audio) {
-		if (audio.paused && get(playerStore).errored !== true) {
+
+const MAX_AUTO_RETRIES = 5;
+const AUTO_RETRY_MS = 5000;
+let autoRetryInterval: ReturnType<typeof setInterval> | undefined;
+let autoRetryCount = 0;
+
+function clearAutoRetry() {
+	if (autoRetryInterval) {
+		clearInterval(autoRetryInterval);
+		autoRetryInterval = undefined;
+	}
+	autoRetryCount = 0;
+}
+
+function scheduleAutoRetry() {
+	if (autoRetryInterval) return;
+	autoRetryCount = 0;
+	autoRetryInterval = setInterval(() => {
+		autoRetryCount += 1;
+		if (autoRetryCount > MAX_AUTO_RETRIES) {
+			clearAutoRetry();
+			return;
+		}
+		const state = get(playerStore);
+		if (state.type !== 'podcast' && state.type !== 'radio') {
+			clearAutoRetry();
+			return;
+		}
+		if (!state.errored && audio && !audio.paused) {
+			clearAutoRetry();
+			return;
+		}
+		void recoverPlayback();
+	}, AUTO_RETRY_MS);
+}
+
+function getResumeTime(state: PlayerState): number {
+	if (state.type !== 'podcast' || !state.currentEpisode) return 0;
+	if (lastKnownGoodTime > 0) return lastKnownGoodTime;
+	if (state.currentTime > 0) return state.currentTime;
+	return getEpisodeProgressTimestamp(
+		get(podcastProgress),
+		state.currentPodcast.id,
+		state.currentEpisode.id
+	);
+}
+
+/**
+ * Re-request the current source and resume.
+ * When fromUserGesture is true, play() runs immediately (keeps the click gesture).
+ */
+async function recoverPlayback(fromUserGesture = false) {
+	const state = get(playerStore);
+	if (!audio) return;
+	if (state.type !== 'radio' && state.type !== 'podcast') return;
+
+	// Manual click always wins over an in-flight auto-retry
+	if (recoveryInFlight && !fromUserGesture) return;
+	recoveryInFlight = true;
+
+	playerStore.setBuffering(true);
+	playerStore.setErrored(false);
+
+	const src =
+		state.type === 'radio'
+			? state.currentRadio.streamUrl
+			: state.currentEpisode.url;
+
+	if (!src) {
+		recoveryInFlight = false;
+		playerStore.setErrored(true);
+		return;
+	}
+
+	const resumeAt = state.type === 'podcast' ? getResumeTime(state) : 0;
+
+	try {
+		// Force a real reload even when the URL is unchanged
+		audio.pause();
+		audio.removeAttribute('src');
+		audio.load();
+		audio.src = src;
+		audio.load();
+
+		if (fromUserGesture) {
+			// Keep play() inside the user gesture; seek after playback starts
+			await audio.play();
+			if (resumeAt > 0) {
+				try {
+					audio.currentTime = resumeAt;
+				} catch {
+					/* ignore seek errors on live/unready media */
+				}
+			}
+			recoveryInFlight = false;
 			return;
 		}
 
-		const currentTime = audio.currentTime;
-		audio.load();
-		setTimeout(() => {
-			if (readyStateIsAbleToPlay(audio?.readyState ?? 0)) {
-				audio!.play();
+		await new Promise<void>((resolve, reject) => {
+			const onCanPlay = () => {
+				cleanup();
+				resolve();
+			};
+			const onError = () => {
+				cleanup();
+				reject(new Error('media error'));
+			};
+			const cleanup = () => {
+				audio?.removeEventListener('canplay', onCanPlay);
+				audio?.removeEventListener('error', onError);
+			};
+			audio?.addEventListener('canplay', onCanPlay);
+			audio?.addEventListener('error', onError);
+			if (audio && readyStateIsAbleToPlay(audio.readyState)) {
+				cleanup();
+				resolve();
 			}
-			audio!.currentTime = currentTime;
-		}, 0);
+			setTimeout(() => {
+				cleanup();
+				resolve(); // try play anyway
+			}, 4000);
+		});
+
+		if (resumeAt > 0) {
+			try {
+				audio.currentTime = resumeAt;
+			} catch {
+				/* ignore */
+			}
+		}
+		await audio.play();
+		recoveryInFlight = false;
+	} catch {
+		recoveryInFlight = false;
+		lastMediaErrorAt = Date.now();
+		playerStore.setErrored(true);
+		playerStore.setBuffering(false);
+		scheduleAutoRetry();
 	}
+}
+
+function resetAudio() {
+	void recoverPlayback();
 }
 
 function createPlayerStore() {
@@ -239,7 +462,7 @@ function createPlayerStore() {
 			} else if (state.type === 'podcast') {
 				console.log('playing podcast', state.currentEpisode.url);
 				audio.src = state.currentEpisode.url;
-				podcastProgress.updatePodcastProgress(state.currentPodcast.id, state.currentEpisode.id, 0);
+				// Do not reset progress to 0 here — resume time comes from playPodcast / timeupdate.
 			}
 			// Wait for the source to be loaded
 			audio.load();
@@ -279,15 +502,27 @@ function createPlayerStore() {
 		toggleAudioWhenReady(true);
 	}
 
-	function playPodcast(podcast: Podcast, startWithEpisode?: Episode, startWithTime: number = 0) {
+	function playPodcast(
+		podcast: Podcast,
+		startWithEpisode?: Episode,
+		startWithTime?: number
+	) {
 		const episodeToPlay = startWithEpisode || podcast.items[0];
 		if (!episodeToPlay) return;
+
+		const stored =
+			startWithTime !== undefined
+				? startWithTime
+				: getEpisodeProgressTimestamp(get(podcastProgress), podcast.id, episodeToPlay.id);
+		const resumeAt = resolveResumeTimestamp(stored, episodeToPlay.duration);
+		lastKnownGoodTime = resumeAt;
+		lastMediaErrorAt = 0;
 
 		update(
 			(state): PodcastPlayerState => ({
 				...state,
 				type: 'podcast',
-				currentTime: startWithTime,
+				currentTime: resumeAt,
 				currentRadio: null,
 				currentPodcast: podcast,
 				currentEpisode: episodeToPlay,
@@ -296,7 +531,7 @@ function createPlayerStore() {
 			})
 		);
 
-		seekTo(startWithTime);
+		seekTo(resumeAt);
 		toggleAudioWhenReady(true);
 	}
 
@@ -333,57 +568,81 @@ function createPlayerStore() {
 	}
 
 	function nextTrack(autoPlay: boolean = true) {
-		update((state) => {
-			if (state.type !== 'podcast' || !state.currentEpisode) return state;
-			const currentIndex = state.playlist.findIndex((ep) => ep.id === state.currentEpisode?.id);
-			if (currentIndex < state.playlist.length - 1) {
-				const nextEpisode = state.playlist[currentIndex + 1];
+		const state = get({ subscribe });
+		if (state.type !== 'podcast' || !state.currentEpisode) return;
 
-				if (autoPlay) {
-					toggleAudioWhenReady(true);
-				}
+		const currentIndex = state.playlist.findIndex((ep) => ep.id === state.currentEpisode?.id);
+		if (currentIndex < 0 || currentIndex >= state.playlist.length - 1) {
+			toggleAudioWhenReady(false);
+			return;
+		}
+
+		const nextEpisode = state.playlist[currentIndex + 1];
+		const resumeAt = resolveResumeTimestamp(
+			getEpisodeProgressTimestamp(get(podcastProgress), state.currentPodcast.id, nextEpisode.id),
+			nextEpisode.duration
+		);
+		lastKnownGoodTime = resumeAt;
+		lastMediaErrorAt = 0;
+
+		update(
+			(s): PlayerState => {
+				if (s.type !== 'podcast' || s.currentEpisode?.id !== state.currentEpisode?.id) return s;
 				return {
-					...state,
+					...s,
 					currentEpisode: nextEpisode,
-					duration: Number(nextEpisode.duration),
-					currentTime: 0,
+					duration: nextEpisode.duration ? Number(nextEpisode.duration) : 0,
+					currentTime: resumeAt,
 					isPlaying: !(audio?.paused ?? true)
 				};
-			} else {
-				toggleAudioWhenReady(false);
 			}
-			return state;
-		});
+		);
+
+		seekTo(resumeAt);
+		if (autoPlay) {
+			toggleAudioWhenReady(true);
+		}
 	}
 
 	function previousTrack() {
-		update((state) => {
-			if (state.type !== 'podcast' || !state.currentEpisode) return state;
-			const currentIndex = state.playlist.findIndex((ep) => ep.id === state.currentEpisode?.id);
-			if (currentIndex > 0) {
-				const prevEpisode = state.playlist[currentIndex - 1];
+		const state = get({ subscribe });
+		if (state.type !== 'podcast' || !state.currentEpisode) return;
+
+		const currentIndex = state.playlist.findIndex((ep) => ep.id === state.currentEpisode?.id);
+		if (currentIndex <= 0) return;
+
+		const prevEpisode = state.playlist[currentIndex - 1];
+		const resumeAt = resolveResumeTimestamp(
+			getEpisodeProgressTimestamp(get(podcastProgress), state.currentPodcast.id, prevEpisode.id),
+			prevEpisode.duration
+		);
+		lastKnownGoodTime = resumeAt;
+		lastMediaErrorAt = 0;
+
+		update(
+			(s): PlayerState => {
+				if (s.type !== 'podcast' || s.currentEpisode?.id !== state.currentEpisode?.id) return s;
 				return {
-					...state,
+					...s,
 					currentEpisode: prevEpisode,
-					duration: Number(prevEpisode.duration),
-					currentTime: 0,
+					duration: prevEpisode.duration ? Number(prevEpisode.duration) : 0,
+					currentTime: resumeAt,
 					isPlaying: !(audio?.paused ?? true)
 				};
 			}
-			return state;
-		});
+		);
+
+		seekTo(resumeAt);
 		toggleAudioWhenReady(true);
 	}
 
-	function updateCurrentTime() {
+	function updateCurrentTime(explicitTime?: number, force = false) {
 		update((state) => {
-			if (!state.isBuffering) {
-				return {
-					...state,
-					currentTime: audio?.currentTime ?? 0
-				};
-			}
-			return state;
+			if (!force && state.isBuffering) return state;
+			return {
+				...state,
+				currentTime: explicitTime ?? audio?.currentTime ?? 0
+			};
 		});
 	}
 
@@ -461,34 +720,76 @@ radios.subscribe((list) => {
 
 // Player controls for AUDIO element
 export function togglePlayPause(value?: boolean) {
-	const playerError = get(playerStore).errored;
-	if (playerError) {
-		return resetAudio();
+	const state = get(playerStore);
+	// Warning icon / failed network: force reconnect + play on this click gesture
+	if (state.errored) {
+		clearAutoRetry();
+		scheduleAutoRetry();
+		void recoverPlayback(true);
+		return;
 	}
 	toggleAudioWhenReady(value);
 }
 export function seekTo(time: number) {
-	if (audio) {
-		audio.currentTime = time;
+	if (!Number.isFinite(time) || time < 0) return;
+
+	const state = get(playerStore);
+	const duration =
+		state.type === 'podcast' && Number.isFinite(state.duration) && state.duration > 0
+			? state.duration
+			: Number.isFinite(audio?.duration)
+				? (audio?.duration as number)
+				: undefined;
+	const clamped =
+		duration !== undefined && duration > 0 ? Math.min(time, duration) : time;
+
+	lastKnownGoodTime = clamped;
+	playerStore.updateCurrentTime(clamped, true);
+
+	// When media is in error/offline state, audio.currentTime is unreliable — only update the store.
+	if (audio && !audio.error && !state.errored) {
+		try {
+			audio.currentTime = clamped;
+		} catch {
+			/* ignore seek errors on unready media */
+		}
 	}
 }
 export function skipForward() {
-	if (!audio) return;
+	const state = get(playerStore);
+	if (state.type !== 'podcast') return;
+
+	const duration =
+		Number.isFinite(state.duration) && state.duration > 0
+			? state.duration
+			: Number.isFinite(audio?.duration) && (audio?.duration as number) > 0
+				? (audio?.duration as number)
+				: 0;
+	if (!duration) return;
+
+	const current = lastKnownGoodTime > 0 ? lastKnownGoodTime : state.currentTime;
+	if (!Number.isFinite(current)) return;
+
 	const skipAmount = get(settings).skipSeconds;
-	const newTime = Math.min(audio.currentTime + skipAmount, audio.duration);
-	audio.currentTime = newTime;
+	seekTo(Math.min(current + skipAmount, duration));
 }
 export function skipBackward() {
-	if (!audio) return;
+	const state = get(playerStore);
+	if (state.type !== 'podcast') return;
+
+	const current = lastKnownGoodTime > 0 ? lastKnownGoodTime : state.currentTime;
+	if (!Number.isFinite(current)) return;
+
 	const skipAmount = get(settings).skipSeconds;
-	const newTime = Math.max(audio.currentTime - skipAmount, 0);
-	audio.currentTime = newTime;
+	seekTo(Math.max(current - skipAmount, 0));
 }
 export function restartRadio() {
 	const state = get(playerStore);
 	if (state.type === 'radio' && state.currentRadio && audio) {
-		const currentUrl = state.currentRadio.streamUrl;
-		audio.src = currentUrl;
+		clearAutoRetry();
+		playerStore.setErrored(false);
+		playerStore.setBuffering(true);
+		audio.src = state.currentRadio.streamUrl;
 		audio.load();
 		toggleAudioWhenReady(true);
 	}
@@ -618,7 +919,6 @@ async function ensureVisibleById(id: string, timeoutMs = 4000) {
 	});
 }
 export async function autoplayLastContent() {
-	// Get the last played times for radios and podcasts
 	const lastPlayedRadio = Object.entries(get(radioProgress)).reduce(
 		(latest, [id, progress]) => {
 			if (!latest || progress.lastPlayed > latest.lastPlayed) {
@@ -630,13 +930,15 @@ export async function autoplayLastContent() {
 	);
 
 	const lastPlayedPodcast = Object.entries(get(podcastProgress)).reduce(
-		(latest, [id, progress]) => {
-			if (!latest || progress.lastPlayed > latest.lastPlayed) {
+		(latest, [id, episodes]) => {
+			const episodeProgress = getLatestEpisodeProgress(episodes);
+			if (!episodeProgress) return latest;
+			if (!latest || episodeProgress.lastPlayed > latest.lastPlayed) {
 				return {
 					id,
-					lastPlayed: progress.lastPlayed,
-					episodeId: progress.episodeId,
-					timestamp: progress.timestamp
+					lastPlayed: episodeProgress.lastPlayed,
+					episodeId: episodeProgress.episodeId,
+					timestamp: episodeProgress.timestamp
 				};
 			}
 			return latest;
@@ -644,40 +946,44 @@ export async function autoplayLastContent() {
 		null as { id: string; lastPlayed: number; episodeId: string; timestamp: number } | null
 	);
 
-	// If neither exists, return
 	if (!lastPlayedRadio && !lastPlayedPodcast) return;
 
-	// If both exist, play the most recently played one
 	if (lastPlayedRadio && lastPlayedPodcast) {
 		if (lastPlayedRadio.lastPlayed > lastPlayedPodcast.lastPlayed) {
-			const radio = await get(radios).find((r) => r.id === lastPlayedRadio.id);
+			const radio = get(radios).find((r) => r.id === lastPlayedRadio.id);
 			if (radio) playerStore.playRadio(radio);
 		} else {
-			const podcast = await get(podcasts).find((p: Podcast) => p.id === lastPlayedPodcast.id);
+			const podcast = get(podcasts).find((p: Podcast) => p.id === lastPlayedPodcast.id);
 			if (podcast) {
 				const episode = podcast.items.find((e: Episode) => e.id === lastPlayedPodcast.episodeId);
 				if (episode) {
-					playerStore.playPodcast(podcast, episode, lastPlayedPodcast.timestamp);
+					playerStore.playPodcast(
+						podcast,
+						episode,
+						resolveResumeTimestamp(lastPlayedPodcast.timestamp, episode.duration)
+					);
 				}
 			}
 		}
 		return;
 	}
 
-	// If only radio exists
 	if (lastPlayedRadio) {
-		const radio = await get(radios).find((r) => r.id === lastPlayedRadio.id);
+		const radio = get(radios).find((r) => r.id === lastPlayedRadio.id);
 		if (radio) playerStore.playRadio(radio);
 		return;
 	}
 
-	// If only podcast exists
 	if (lastPlayedPodcast) {
-		const podcast = await get(podcasts).find((p: Podcast) => p.id === lastPlayedPodcast.id);
+		const podcast = get(podcasts).find((p: Podcast) => p.id === lastPlayedPodcast.id);
 		if (podcast) {
 			const episode = podcast.items.find((e: Episode) => e.id === lastPlayedPodcast.episodeId);
 			if (episode) {
-				playerStore.playPodcast(podcast, episode, lastPlayedPodcast.timestamp);
+				playerStore.playPodcast(
+					podcast,
+					episode,
+					resolveResumeTimestamp(lastPlayedPodcast.timestamp, episode.duration)
+				);
 			}
 		}
 	}

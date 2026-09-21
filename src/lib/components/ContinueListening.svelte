@@ -5,7 +5,7 @@
 	import { ChevronLeft, ChevronRight, Trash2 } from 'lucide-svelte';
 	import { type Episode, type Podcast, podcasts } from '$lib/stores/podcast/podcasts';
 	import { type Radio, radios } from '$lib/stores/radio/radios';
-	import { podcastProgress } from '$lib/stores/podcast/podcastProgress';
+	import { podcastProgress, getLatestEpisodeProgress } from '$lib/stores/podcast/podcastProgress';
 	import { radioProgress } from '$lib/stores/radio/radioProgress';
 	import { t } from '$lib/i18n';
 	import { isTouchDevice } from '$lib/util/browserUtils';
@@ -59,7 +59,7 @@
 		}
 	}
 
-	function onScroll(e: Event) {
+	function onScroll(_e?: Event) {
 		if (!scrollContainer) return;
 		if (isTouchDevice()) {
 			showLeftArrow = false;
@@ -83,7 +83,7 @@
 		scrollContainer.scrollBy({ left: scrollAmount, behavior: 'smooth' });
 	}
 
-	function handlePointerDown(item: ContinueListeningItem, event: PointerEvent) {
+	function handlePointerDown(_item: ContinueListeningItem, _event: PointerEvent) {
 		longPressTimeout = setTimeout(() => {
 			isEditMode = true;
 		}, 500);
@@ -111,16 +111,20 @@
 
 	$: {
 		const podcastItems = $podcasts
-			.filter((p) => $podcastProgress[p.id])
-			.map((p) => ({
-				type: 'podcast' as const,
-				item: {
-					...p,
-					episodeId: $podcastProgress[p.id].episodeId,
-					timestamp: $podcastProgress[p.id].timestamp
-				},
-				lastPlayed: $podcastProgress[p.id].lastPlayed
-			}));
+			.map((p) => {
+				const latest = getLatestEpisodeProgress($podcastProgress[p.id]);
+				if (!latest) return null;
+				return {
+					type: 'podcast' as const,
+					item: {
+						...p,
+						episodeId: latest.episodeId,
+						timestamp: latest.timestamp
+					},
+					lastPlayed: latest.lastPlayed
+				};
+			})
+			.filter((item): item is NonNullable<typeof item> => item !== null);
 
 		const radioItems = $radios
 			.filter((r) => $radioProgress[r.id])
@@ -144,7 +148,7 @@
 		if (item.type === 'podcast') {
 			const episode = item.item.items.find((ep: Episode) => ep.id === item.item.episodeId);
 			if (episode) {
-				playerStore.playPodcast(item.item, episode, item.item.timestamp);
+				playerStore.playPodcast(item.item, episode);
 			}
 		} else {
 			playerStore.playRadio(item.item);
@@ -205,7 +209,7 @@
 			on:wheel={onMouseWheel}
 			class="no-scrollbar flex gap-1 overflow-x-auto p-2"
 		>
-			{#each continueListeningItems as item, index}
+			{#each continueListeningItems as item}
 				<div
 					role="button"
 					tabindex="0"
@@ -213,7 +217,7 @@
                     transition-transform hover:scale-105 {isEditMode
 						? 'animate-bounce-subtle'
 						: ''}"
-					on:click={(e) => handleItemClick(item)}
+					on:click={() => handleItemClick(item)}
 					on:keydown={(e) => handleItemKeyDown(item, e)}
 					on:pointerdown={(e) => handlePointerDown(item, e)}
 					on:pointerup={handlePointerUp}
@@ -233,7 +237,7 @@
 					{:else if isEditMode}
 						<button
 							class="flex items-center pl-[.2rem] pr-2 text-error"
-							on:click={(e) => handleDelete(item)}
+							on:click|stopPropagation={() => handleDelete(item)}
 						>
 							<Trash2 class="h-6 w-6" />
 						</button>

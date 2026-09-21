@@ -166,6 +166,7 @@
 					max={$playerStore.duration || 100}
 					value={$playerStore.currentTime}
 					class="range range-xs flex-1"
+					disabled={$playerStore.errored}
 					on:input|stopPropagation={(e) => seekTo(parseFloat(e.currentTarget.value))}
 					on:touchstart|stopPropagation={iosRangeTouchEventPolyfill}
 					on:touchmove|stopPropagation={iosRangeTouchEventPolyfill}
@@ -238,7 +239,9 @@
 
 					<TouchableButton
 						onClick={togglePlayPause}
-						ariaLabel={$playerStore.isPlaying ? $t.player.pause : $t.player.play}
+						ariaLabel={$playerStore.isPlaying && !$playerStore.errored
+							? $t.player.pause
+							: $t.player.play}
 					>
 						{#if $playerStore.errored}
 							<TriangleAlert class="h-8 w-8 pb-px" />
