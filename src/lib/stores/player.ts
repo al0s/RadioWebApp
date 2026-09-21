@@ -135,16 +135,14 @@ function initAudio() {
 			clearInterval(resetAudioInterval);
 		}
 		resetAudioInterval = setInterval(() => {
-			resetAudio();
+			recoverPlayback();
 		}, 4000);
 	});
 
 	audio.addEventListener('error', () => {
 		playerStore.setErrored();
 	});
-	audio.addEventListener('abort', () => {
-		playerStore.setErrored();
-	});
+	// Do not treat abort as an error — changing audio.src / load() aborts the prior request.
 
 	audio.addEventListener('ended', () => {
 		playerStore.nextTrack(get(settings).autoplay);
@@ -196,6 +194,19 @@ function resetAudio() {
 			audio!.currentTime = currentTime;
 		}, 0);
 	}
+}
+
+/** Radio needs a full stream reconnect; podcast can reload in place and keep position. */
+function recoverPlayback() {
+	const state = get(playerStore);
+	if (audio?.paused && state.errored !== true) {
+		return;
+	}
+	if (state.type === 'radio') {
+		restartRadio();
+		return;
+	}
+	resetAudio();
 }
 
 function createPlayerStore() {
@@ -303,7 +314,8 @@ function createPlayerStore() {
 				currentPodcast: full,
 				currentEpisode: episodeToPlay,
 				playlist: full.items,
-				duration: episodeToPlay.duration ? Number(episodeToPlay.duration) : 0
+				duration: episodeToPlay.duration ? Number(episodeToPlay.duration) : 0,
+				errored: false
 			})
 		);
 
@@ -343,46 +355,90 @@ function createPlayerStore() {
 		});
 	}
 
-	function nextTrack(autoPlay: boolean = true) {
-		update((state) => {
-			if (state.type !== 'podcast' || !state.currentEpisode) return state;
-			const currentIndex = state.playlist.findIndex((ep) => ep.id === state.currentEpisode?.id);
-			if (currentIndex < state.playlist.length - 1) {
-				const nextEpisode = state.playlist[currentIndex + 1];
-
-				if (autoPlay) {
-					toggleAudioWhenReady(true);
-				}
-				return {
-					...state,
-					currentEpisode: nextEpisode,
-					duration: Number(nextEpisode.duration),
-					currentTime: 0,
-					isPlaying: !(audio?.paused ?? true)
-				};
-			} else {
-				toggleAudioWhenReady(false);
-			}
-			return state;
-		});
+	async function resolvePlaylist(
+		podcast: Podcast,
+		playlist: Episode[]
+	): Promise<{ podcast: Podcast; playlist: Episode[] }> {
+		if (playlist.length > 0 && playlist.every((ep) => ep.url)) {
+			return { podcast, playlist };
+		}
+		const full = (await podcasts.ensureFull(podcast)) ?? podcast;
+		return { podcast: full, playlist: full.items };
 	}
 
-	function previousTrack() {
-		update((state) => {
-			if (state.type !== 'podcast' || !state.currentEpisode) return state;
-			const currentIndex = state.playlist.findIndex((ep) => ep.id === state.currentEpisode?.id);
-			if (currentIndex > 0) {
-				const prevEpisode = state.playlist[currentIndex - 1];
+	function findPlayableEpisode(
+		playlist: Episode[],
+		fromIndex: number,
+		direction: 1 | -1
+	): Episode | undefined {
+		for (let i = fromIndex + direction; i >= 0 && i < playlist.length; i += direction) {
+			if (playlist[i]?.url) return playlist[i];
+		}
+		return undefined;
+	}
+
+	async function nextTrack(autoPlay: boolean = true) {
+		const state = get({ subscribe });
+		if (state.type !== 'podcast' || !state.currentEpisode) return;
+
+		const currentId = state.currentEpisode.id;
+		const { podcast, playlist } = await resolvePlaylist(state.currentPodcast, state.playlist);
+		const currentIndex = playlist.findIndex((ep) => ep.id === currentId);
+		const nextEpisode = findPlayableEpisode(playlist, currentIndex, 1);
+
+		if (!nextEpisode) {
+			toggleAudioWhenReady(false);
+			return;
+		}
+
+		update(
+			(s): PlayerState => {
+				if (s.type !== 'podcast' || s.currentEpisode?.id !== currentId) return s;
 				return {
-					...state,
-					currentEpisode: prevEpisode,
-					duration: Number(prevEpisode.duration),
+					...s,
+					currentPodcast: podcast,
+					currentEpisode: nextEpisode,
+					playlist,
+					duration: nextEpisode.duration ? Number(nextEpisode.duration) : 0,
 					currentTime: 0,
+					errored: false,
 					isPlaying: !(audio?.paused ?? true)
 				};
 			}
-			return state;
-		});
+		);
+
+		if (autoPlay) {
+			toggleAudioWhenReady(true);
+		}
+	}
+
+	async function previousTrack() {
+		const state = get({ subscribe });
+		if (state.type !== 'podcast' || !state.currentEpisode) return;
+
+		const currentId = state.currentEpisode.id;
+		const { podcast, playlist } = await resolvePlaylist(state.currentPodcast, state.playlist);
+		const currentIndex = playlist.findIndex((ep) => ep.id === currentId);
+		const prevEpisode = findPlayableEpisode(playlist, currentIndex, -1);
+
+		if (!prevEpisode) return;
+
+		update(
+			(s): PlayerState => {
+				if (s.type !== 'podcast' || s.currentEpisode?.id !== currentId) return s;
+				return {
+					...s,
+					currentPodcast: podcast,
+					currentEpisode: prevEpisode,
+					playlist,
+					duration: prevEpisode.duration ? Number(prevEpisode.duration) : 0,
+					currentTime: 0,
+					errored: false,
+					isPlaying: !(audio?.paused ?? true)
+				};
+			}
+		);
+
 		toggleAudioWhenReady(true);
 	}
 
@@ -474,7 +530,7 @@ radios.subscribe((list) => {
 export function togglePlayPause(value?: boolean) {
 	const playerError = get(playerStore).errored;
 	if (playerError) {
-		return resetAudio();
+		return recoverPlayback();
 	}
 	toggleAudioWhenReady(value);
 }
@@ -498,6 +554,8 @@ export function skipBackward() {
 export function restartRadio() {
 	const state = get(playerStore);
 	if (state.type === 'radio' && state.currentRadio && audio) {
+		playerStore.setErrored(false);
+		playerStore.setBuffering(true);
 		const currentUrl = state.currentRadio.streamUrl;
 		audio.src = currentUrl;
 		audio.load();
